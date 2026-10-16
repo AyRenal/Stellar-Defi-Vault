@@ -5,6 +5,10 @@
 //! a summary, then `# Authorization`, `# Errors` and `# Events` sections
 //! (issue #675).
 #![no_std]
+// Issue #658: the contract has never needed `unsafe`, and a deployed Soroban
+// contract must not. Forbidding it crate-wide also keeps unsafe blocks out of
+// the test-only code that shares this crate.
+#![forbid(unsafe_code)]
 // Issue #675: every public item should be documented. Left at `warn` while the
 // existing ~1,000 undocumented items are worked through; flip to `deny` once
 // `cargo doc` is clean.
@@ -17,6 +21,7 @@ mod events;
 pub mod example_consumer;
 pub mod interface;
 pub mod nft;
+mod reward_math;
 mod storage;
 pub mod vault;
 
@@ -84,6 +89,11 @@ mod test_features_287_290;
 
 #[cfg(test)]
 mod test_issues_463_466;
+
+// Issue #658: this module was missing its `#[cfg(test)]` gate, so its test
+// helpers (and their `testutils` dependencies) were compiled into the release
+// WASM. Every test module must stay behind `#[cfg(test)]`.
+#[cfg(test)]
 mod test_issues_467_470;
 
 #[cfg(test)]
@@ -91,3 +101,21 @@ mod test_issues_459_462;
 
 #[cfg(test)]
 mod test_peg_stabilization;
+
+// ── Issue #659: storage-layout upgrade-safety snapshot ───────────────────────
+#[cfg(test)]
+mod test_storage_layout;
+
+// ── Issue #660: resource-footprint limits for batch/loop entrypoints ─────────
+#[cfg(test)]
+mod test_resource_footprint;
+
+/// Pure math surfaces exposed for property tests and `cargo-fuzz` (issue #661).
+///
+/// Gated so it never lands in the deployed WASM: the fuzz crate enables the
+/// `testutils` feature, and in-crate tests get it via `cfg(test)`.
+#[cfg(any(test, feature = "testutils"))]
+pub mod fuzz_support {
+    pub use crate::balance::{amount_to_shares_with_decimals, shares_to_amount_with_decimals};
+    pub use crate::reward_math::reward_for_ledgers;
+}

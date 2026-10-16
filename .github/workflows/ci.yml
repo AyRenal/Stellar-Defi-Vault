@@ -49,6 +49,22 @@ jobs:
           path: target/wasm32-unknown-unknown/release/stellar_defi_vault.wasm
           if-no-files-found: error
 
+      # Issue #658: the deployed artifact must be built without `testutils`, and
+      # must not contain any test-only symbols. `testutils` is not a default
+      # feature, so a plain release build is the guarantee.
+      - name: Build release WASM without testutils
+        run: cargo build --target wasm32-unknown-unknown --release --no-default-features
+
+      - name: Assert no test-only symbols in the release WASM
+        run: |
+          set -euo pipefail
+          wasm=target/wasm32-unknown-unknown/release/stellar_defi_vault.wasm
+          if strings "$wasm" | grep -iE 'testutils|__test_|test_fixture|test_issues_'; then
+            echo "::error::test-only symbols found in the release WASM"
+            exit 1
+          fi
+          echo "OK: no test-only symbols in $wasm"
+
   audit:
     name: Dependency Audit
     runs-on: ubuntu-latest

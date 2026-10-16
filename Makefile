@@ -1,7 +1,12 @@
-.PHONY: build test docs coverage coverage-lcov scout scout-sarif mutants deploy-testnet stake claim
+.PHONY: build test docs coverage coverage-lcov scout scout-sarif mutants deploy-testnet stake claim wasm-release fuzz-check fuzz-build fuzz
 
 build:
 	cargo build --target wasm32-unknown-unknown --release
+
+# Release WASM with no test-only features (issue #658). `testutils` is not a
+# default feature, so a plain release build must never pull test code in.
+wasm-release:
+	cargo build --target wasm32-unknown-unknown --release --no-default-features
 
 test:
 	cargo test --features testutils
@@ -47,3 +52,20 @@ stake:
 claim:
 	chmod +x scripts/claim.sh
 	./scripts/claim.sh
+
+# ── Fuzzing (issue #661). See fuzz/README.md ────────────────────────────────
+
+# Fast check that the fuzz targets still compile (no nightly/libFuzzer needed).
+fuzz-check:
+	cargo check --manifest-path fuzz/Cargo.toml
+
+# Build the libFuzzer binaries (requires nightly + cargo-fuzz).
+fuzz-build:
+	cargo +nightly fuzz build
+
+# Run every target for FUZZ_TIME seconds each (default 60).
+fuzz:
+	cd fuzz && set -e; for t in $$(cargo +nightly fuzz list); do \
+		echo "fuzzing $$t"; \
+		cargo +nightly fuzz run $$t -- -max_total_time=$${FUZZ_TIME:-60}; \
+	done
