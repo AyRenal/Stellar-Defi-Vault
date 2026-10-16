@@ -301,6 +301,22 @@ storage type (instance, persistent, or temporary) each piece of contract
 state uses and why, including known scaling risks around the depositor
 registry.
 
+## Fuzzing
+
+Coverage-guided fuzz targets for share conversion and reward math live in
+[`fuzz/`](./fuzz/) and complement the `proptest` property tests. They need a
+nightly toolchain and [`cargo-fuzz`](https://github.com/rust-fuzz/cargo-fuzz):
+
+```bash
+cargo install cargo-fuzz
+cargo +nightly fuzz run share_conversion                  # until it finds a crash
+cargo +nightly fuzz run reward_calculation -- -max_total_time=120
+```
+
+`make fuzz-check` compiles the targets without nightly, and
+`.github/workflows/fuzz.yml` runs a bounded pass daily. See
+[`fuzz/README.md`](./fuzz/README.md) for the invariants each target asserts.
+
 ## Security
 
 See [docs/SECURITY.md](./docs/SECURITY.md) for the full security model, including:

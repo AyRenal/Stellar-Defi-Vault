@@ -6926,40 +6926,16 @@ impl VaultContract {
         season_multiplier_bps: u32,
         elapsed_ledgers: u32,
     ) -> Result<i128, VaultError> {
-        if elapsed_ledgers == 0 || amount == 0 {
-            return Ok(0);
-        }
-
-        // Apply tier multiplier: effective_rate = rate_bps * tier_mult / 10000
-        let effective_rate_bps = (rate_bps as i128)
-            .checked_mul(multiplier_bps as i128)
-            .ok_or(VaultError::ArithmeticError)?
-            .checked_div(BOOST_BPS_BASE as i128)
-            .ok_or(VaultError::ArithmeticError)?;
-
-        // Stack campaign multiplier: boosted_rate = effective_rate * campaign_mult / 10000
-        let boosted_rate_bps = effective_rate_bps
-            .checked_mul(campaign_multiplier_bps as i128)
-            .ok_or(VaultError::ArithmeticError)?
-            .checked_div(BOOST_BPS_BASE as i128)
-            .ok_or(VaultError::ArithmeticError)?;
-
-        // Issue #276: stack season multiplier on top of tier + campaign.
-        let seasoned_rate_bps = boosted_rate_bps
-            .checked_mul(season_multiplier_bps as i128)
-            .ok_or(VaultError::ArithmeticError)?
-            .checked_div(BOOST_BPS_BASE as i128)
-            .ok_or(VaultError::ArithmeticError)?;
-
-        amount
-            .checked_mul(seasoned_rate_bps)
-            .ok_or(VaultError::ArithmeticError)?
-            .checked_mul(elapsed_ledgers as i128)
-            .ok_or(VaultError::ArithmeticError)?
-            .checked_div(BOOST_BPS_BASE as i128)
-            .ok_or(VaultError::ArithmeticError)?
-            .checked_div(STELLAR_LEDGERS_PER_YEAR as i128)
-            .ok_or(VaultError::ArithmeticError)
+        // Issue #661: the formula lives in `reward_math` so unit tests,
+        // proptest and the cargo-fuzz targets all exercise one implementation.
+        crate::reward_math::reward_for_ledgers(
+            amount,
+            rate_bps,
+            multiplier_bps,
+            campaign_multiplier_bps,
+            season_multiplier_bps,
+            elapsed_ledgers,
+        )
     }
 
     fn boost_multiplier_for_ledger(env: &Env, user: &Address, ledger: u32) -> u32 {
