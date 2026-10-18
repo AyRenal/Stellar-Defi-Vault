@@ -971,6 +971,8 @@ impl VaultContract {
     pub fn claim(env: Env, staker: Address) -> Result<i128, VaultError> {
         let _guard = ReentrancyGuard::new(&env)?;
         staker.require_auth();
+        // Issue #707: an owner claim counts as an interaction.
+        beneficiary_inheritance::touch(&env, &staker);
         // Issue #201: rate limit applies to explicit claim() calls only ΓÇö
         // not to the internal do_claim() invoked by stake_and_claim() or
         // NFT-transfer-with-rewards flows, which have their own callers'
@@ -1024,6 +1026,8 @@ impl VaultContract {
     pub fn claim_partial(env: Env, staker: Address, amount: i128) -> Result<i128, VaultError> {
         let _guard = ReentrancyGuard::new(&env)?;
         staker.require_auth();
+        // Issue #707: an owner claim counts as an interaction.
+        beneficiary_inheritance::touch(&env, &staker);
         Self::check_claim_rate_limit(&env, &staker);
         if amount <= 0 {
             return Err(VaultError::ZeroAmount);
@@ -1225,6 +1229,13 @@ impl VaultContract {
         if Self::get_lock_status(env.clone(), user.clone()).is_some() {
             return Err(VaultLockError::LockAlreadyActive);
         }
+        // Issue #705: locking is an inflow-side commitment; blocked while the
+        // pool is withdraw-only.
+        if withdraw_only_mode::is_active(&env) {
+            return Err(VaultLockError::WithdrawOnlyMode);
+        }
+        // Issue #707: locking counts as an owner interaction.
+        beneficiary_inheritance::touch(&env, &user);
         let max_duration: u32 = env
             .storage()
             .instance()
@@ -3111,8 +3122,11 @@ impl VaultContract {
     /// Withdrawals, `unstake_all` and claims deliberately stay open, and the
     /// unstake fee is waived (see `do_unstake`/`withdraw_to`), so this is only
     /// called from the deposit paths.
+    ///
+    /// Issue #705: withdraw-only mode blocks deposits through the same gate,
+    /// with the same `PoolShuttingDown` error (`VaultError` has no free slot).
     fn require_no_sunset(env: &Env) -> Result<(), VaultError> {
-        if balance::get_sunset_exit_deadline(env).is_some() {
+        if balance::get_sunset_exit_deadline(env).is_some() || withdraw_only_mode::is_active(env) {
             return Err(VaultError::PoolShuttingDown);
         }
         Ok(())
@@ -4926,6 +4940,8 @@ impl VaultContract {
     ) -> Result<i128, VaultError> {
         delegate.require_auth();
         Self::require_not_paused(&env)?;
+        // Issue #705: no inflows while the pool is withdraw-only.
+        Self::require_no_sunset(&env)?;
 
         if amount <= 0 {
             return Err(VaultError::ZeroAmount);
@@ -5680,13 +5696,26 @@ impl VaultContract {
         to: Address,
     ) -> Result<(), VaultError> {
         from.require_auth();
+        Self::move_position_with_rewards(&env, &from, &to)
+    }
+
+    /// Move `from`'s whole position and accrued reward state to `to` without
+    /// requiring `from`'s authorization. Shared by
+    /// `transfer_position_with_rewards` (which authorizes `from` first) and
+    /// `claim_inheritance` (issue #707, authorized by the inactivity rule).
+    fn move_position_with_rewards(
+        env: &Env,
+        from: &Address,
+        to: &Address,
+    ) -> Result<(), VaultError> {
+        let env = env.clone();
         Self::require_not_paused(&env)?;
 
-        let from_shares = balance::get_shares(&env, &from);
+        let from_shares = balance::get_shares(&env, from);
         if from_shares == 0 {
             return Err(VaultError::PositionNotFound);
         }
-        if balance::get_shares(&env, &to) > 0 {
+        if balance::get_shares(&env, to) > 0 {
             return Err(VaultError::RecipientAlreadyStaking);
         }
 
@@ -6416,9 +6445,8 @@ impl VaultContract {
         //
         // Issue #213: when a dynamic fee config is set, it replaces the static
         // fee from `set_unstake_fee_bps` entirely.
-        //
-        // Issue #703: an active fee holiday waives the fee altogether.
-        let unstake_fee_bps = if crate::vault_extensions_701_704::settle_fee_holiday(env) {
+        let unstake_fee_bps = if withdraw_only_mode::is_active(env) {
+            // Issue #705: exits are fee-free while the pool is withdraw-only.
             0
         } else if balance::get_dynamic_fee_config(env).is_some() {
             Self::compute_dynamic_fee_bps(env)
@@ -6691,7 +6719,9 @@ impl VaultContract {
     /// Otherwise, do nothing. This should be called after accrue_rewards in
     /// stake and unstake flows.
     fn maybe_restake_rewards(env: &Env, user: &Address) -> Result<(), VaultError> {
-        if !balance::get_auto_restake(env, user) {
+        // Issue #705: restaking is an inflow; rewards stay accrued and
+        // claimable while the pool is withdraw-only.
+        if !balance::get_auto_restake(env, user) || withdraw_only_mode::is_active(env) {
             return Ok(());
         }
 
@@ -9043,40 +9073,6 @@ impl VaultContract {
             estimated_daily_obligations,
             is_solvent_7_days,
         }
-    }
-
-    /// Consolidate multiple staking positions into a single position.
-    ///
-    /// For the current scalar share balance layout, this performs a reward accrual step
-    /// and resets the staking timestamp, serving as a forward-compatible graceful no-op.
-    pub fn merge_positions(env: Env, user: Address) -> Result<(), VaultError> {
-        user.require_auth();
-
-        let shares = balance::get_shares(&env, &user);
-        if shares == 0 {
-            return Err(VaultError::PositionNotFound);
-        }
-
-        // Accrue any pending rewards first
-        Self::accrue_rewards(&env, &user, shares)?;
-
-        // In a multi-position model, we would aggregate the amounts and combine lockups.
-        // In the current scalar model, we consolidate the single position.
-        let total_shares = balance::get_total_shares(&env);
-        let total_deposited = balance::get_total_deposited(&env);
-        let total_amount =
-            balance::shares_to_amount(total_shares, total_deposited, shares).unwrap_or(0);
-
-        // Reset locking period by updating the staked_at sequence to current ledger sequence
-        let current_ledger = env.ledger().sequence();
-        env.storage()
-            .persistent()
-            .set(&DataKey::StakedAtLedger(user.clone()), &current_ledger);
-
-        // Emit positions_merged event (user, count_merged, total_amount)
-        events::positions_merged(&env, &user, 1, total_amount);
-
-        Ok(())
     }
 
     // ── Issue #118: relayer approval ─────────────────────────────────────────────
@@ -13187,9 +13183,10 @@ impl VaultContract {
         // Issue #525: withdrawals are fee-free for the whole sunset window, so
         // a sunsetting user exits at full value. Everything below is already
         // gated on `fee > 0`, so a zero fee also skips the treasury/buyback
-        // routing and the protocol-fee accounting.
+        // routing and the protocol-fee accounting. Issue #705: same waiver
+        // while the pool is withdraw-only.
         let unstake_fee_bps = if balance::get_sunset_exit_deadline(env).is_some()
-            || crate::vault_extensions_701_704::settle_fee_holiday(env)
+            || withdraw_only_mode::is_active(env)
         {
             0
         } else {
@@ -14450,9 +14447,10 @@ pub fn get_reward_threshold(env: Env) -> i128 {
             .ok_or(VaultError::ArithmeticError)?;
 
         // Issue #525: same fee waiver as `do_unstake` — `withdraw_to` is a
-        // withdrawal too, so it stays open and free during a sunset.
+        // withdrawal too, so it stays open and free during a sunset (and,
+        // issue #705, while the pool is withdraw-only).
         let unstake_fee_bps = if balance::get_sunset_exit_deadline(&env).is_some()
-            || crate::vault_extensions_701_704::settle_fee_holiday(&env)
+            || withdraw_only_mode::is_active(&env)
         {
             0
         } else {
@@ -14815,5 +14813,11 @@ pub mod batch_vote;
 pub mod daily_withdrawal_limit;
 #[path = "position_mirroring.rs"]
 pub mod position_mirroring;
-#[path = "vault_extensions_701_704.rs"]
-pub mod vault_extensions_701_704;
+#[path = "withdraw_only_mode.rs"]
+pub mod withdraw_only_mode;
+#[path = "position_split_merge.rs"]
+pub mod position_split_merge;
+#[path = "beneficiary_inheritance.rs"]
+pub mod beneficiary_inheritance;
+#[path = "dust_cleanup.rs"]
+pub mod dust_cleanup;

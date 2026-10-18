@@ -57,7 +57,10 @@ calls them:
   `start_graceful_shutdown` can stop deposits, stop withdrawals, or permanently
   close new deposits. `pause_until` is lazy and auto-unpauses at its target
   ledger; `unpause` always clears that schedule. A configured pause-duration
-  limit lets anyone force an overdue pause open.
+  limit lets anyone force an overdue pause open. `enter_withdraw_only_mode`
+  blocks all inflows (deposits, staking, compounding, locking) while keeping
+  withdrawals and claims open and fee-free; `exit_withdraw_only_mode` reverses
+  it.
 - **Economics:** `set_reward_rate_bps`, `set_referral_bonus_bps`,
   `set_unstake_fee_bps`, `set_fee_recipients`, `set_treasury_split`,
   `set_boost_schedule`, `set_lock_boost_schedule`, `set_rounding_policy`,
@@ -77,7 +80,11 @@ calls them:
 - **User-state and migration:** `slash`, `schedule_vesting`, KYC/allowlist
   batches, `export_state`, and `import_state` can affect individual positions,
   eligibility, or migration. `slash` can reduce a user's position; it does not
-  require that user's signature.
+  require that user's signature. `set_dust_threshold`, `set_dust_keeper_tip_bps`
+  and `set_dust_treasury` let any keeper close a position worth less than the
+  threshold without the owner's signature; the value is paid to the owner (or
+  to the dust treasury if the admin sets one), less the keeper tip of at most
+  10%.
 - **Delayed controls:** `queue_action` followed by `execute_action` is delayed
   by the configured ledger timelock for supported rate and pause actions.
   Multisig proposals require their approval threshold but are not an

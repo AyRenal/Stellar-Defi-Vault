@@ -56,6 +56,8 @@ fn read_log(env: &Env, user: &Address) -> Vec<ActivityEntry> {
 /// Appends an entry to `user`'s activity log, evicting the oldest entry when
 /// the log is full. Called from the vault's deposit and withdrawal paths.
 pub(crate) fn record(env: &Env, user: &Address, kind: ActivityKind, amount: i128, shares: i128) {
+    // Issue #707: every deposit and withdrawal is an owner interaction.
+    crate::vault::beneficiary_inheritance::touch(env, user);
     let mut log = read_log(env, user);
     if log.len() >= MAX_ACTIVITY_ENTRIES {
         log.pop_front();

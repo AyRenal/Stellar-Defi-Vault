@@ -59,7 +59,11 @@ pub fn apply_claim_fee(
     reward_before_fee: i128,
 ) -> Result<i128, VaultError> {
     let fee_bps = get_claim_fee_bps_internal(env);
-    if fee_bps == 0 || reward_before_fee <= 0 {
+    // Issue #705: claims are fee-free while the pool is withdraw-only.
+    if fee_bps == 0
+        || reward_before_fee <= 0
+        || crate::vault::withdraw_only_mode::is_active(env)
+    {
         return Ok(reward_before_fee);
     }
 
