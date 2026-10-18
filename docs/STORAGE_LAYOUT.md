@@ -58,3 +58,21 @@ already-deployed contract. To refresh the golden file as part of such a change:
 
 If the snapshot file is missing (fresh checkout or after deletion), the test
 writes it and reports that it must be committed.
+
+## Storage Key Namespacing Convention (Issue #646)
+
+Soroban limits any single `#[contracttype]` enum to a maximum of 50 variants (`VecM<_, 50>`). The legacy `DataKey` reached this 50-variant limit.
+
+To prevent falling back to ad hoc, untyped `Symbol` keys, all storage keys are split into domain-specific sub-enums wrapped by `StorageKey`:
+
+1. **`AdminKey`**: Protocol-wide configuration, authority, and timelocks (`Admin`, `PendingAdmin`, `EmergencyAdmin`, `Deployer`, `Token`, `TotalShares`, etc.).
+2. **`PositionKey`**: Per-user staking positions, balances, checkpoints, and delegations (`ShareBalance(Address)`, `RewardAccumulatorCheckpoint(Address)`, etc.).
+3. **`RewardKey`**: Reward distributions, emissions, epochs, and campaigns (`RewardRateBps`, `GlobalRewardIndex`, `LastAccumulatorLedger`, etc.).
+4. **`GovernanceKey`**: Access control, whitelisting, verification, and shutdown states (`WhitelistEnabled`, `KycApproved(Address)`, `ShuttingDown`, etc.).
+
+### Convention for Adding New Storage Keys
+- When adding state to the vault, **do not add new variants to `DataKey`**.
+- Add new typed variants to the corresponding domain sub-enum (`AdminKey`, `PositionKey`, `RewardKey`, or `GovernanceKey`).
+- Access storage via `StorageKey::<SubEnum>(...)`.
+- Legacy `DataKey` variants map seamlessly to `StorageKey` via `DataKey::to_storage_key()`.
+

@@ -1604,3 +1604,36 @@ pub fn insurance_reserve_used(
     env.events()
         .publish(topics, (amount, reason_hash.clone(), ledger));
 }
+
+/// Emitted when an admin proposes a new administrator address (Issue #738).
+pub fn admin_proposal_created(env: &Env, admin: &Address, new_admin: &Address) {
+    env.events().publish(
+        (symbol_short!("adm_prop"), admin.clone()),
+        (new_admin.clone(), env.ledger().sequence()),
+    );
+}
+
+/// Emitted when a proposed admin accepts and completes the transfer (Issue #738).
+pub fn admin_proposal_accepted(env: &Env, old_admin: &Address, new_admin: &Address) {
+    env.events().publish(
+        (symbol_short!("adm_acpt"), old_admin.clone()),
+        (new_admin.clone(), env.ledger().sequence()),
+    );
+}
+
+/// Emitted when an admin cancels an active admin transfer proposal (Issue #738).
+pub fn admin_proposal_cancelled(env: &Env, admin: &Address, cancelled_admin: &Address) {
+    env.events().publish(
+        (symbol_short!("adm_canc"), admin.clone()),
+        (cancelled_admin.clone(), env.ledger().sequence()),
+    );
+}
+
+/// Emitted when the global reward accumulator index updates (Issue #650).
+pub fn reward_accumulator_updated(env: &Env, global_index: i128, ledger: u32) {
+    env.events().publish(
+        (symbol_short!("rw_acc"),),
+        (global_index, ledger),
+    );
+}
+

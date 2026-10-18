@@ -1,23 +1,9 @@
 use crate::errors::VaultError;
-use crate::storage::DataKey;
-use soroban_sdk::{Address, Env};
+use crate::storage::{AdminKey, DataKey, StorageKey};
+use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
-pub fn set_admin(env: &Env, admin: &Address) {
-    env.storage().instance().set(&DataKey::Admin, admin);
-}
-
-pub fn get_admin(env: &Env) -> Result<Address, VaultError> {
-    env.storage()
-        .instance()
-        .get(&DataKey::Admin)
-        .ok_or(VaultError::NotInitialized)
-}
-
-pub fn require_admin(env: &Env) -> Result<(), VaultError> {
-    let admin = get_admin(env)?;
-    admin.require_auth();
-    Ok(())
-}
+const ADMIN_RENOUNCED_KEY: Symbol = symbol_short!("adm_none");
+const PENDING_ADMIN_KEY: Symbol = symbol_short!("pend_adm");
 
 pub fn require_admin_as(env: &Env, claimed_admin: &Address) -> Result<(), VaultError> {
     let admin = get_admin(env)?;
@@ -27,11 +13,30 @@ pub fn require_admin_as(env: &Env, claimed_admin: &Address) -> Result<(), VaultE
     admin.require_auth();
     Ok(())
 }
-use crate::errors::VaultError;
-use crate::storage::DataKey;
-use soroban_sdk::{symbol_short, Address, Env, Vec};
 
-const ADMIN_RENOUNCED_KEY: soroban_sdk::Symbol = symbol_short!("adm_none");
+/// Reads the currently proposed pending administrator, if any (Issue #738).
+pub fn get_pending_admin(env: &Env) -> Option<Address> {
+    env.storage()
+        .instance()
+        .get(&StorageKey::Admin(AdminKey::PendingAdmin))
+        .or_else(|| env.storage().instance().get(&PENDING_ADMIN_KEY))
+}
+
+/// Sets the pending administrator proposal (Issue #738).
+pub fn set_pending_admin(env: &Env, pending: &Address) {
+    env.storage()
+        .instance()
+        .set(&StorageKey::Admin(AdminKey::PendingAdmin), pending);
+    env.storage().instance().set(&PENDING_ADMIN_KEY, pending);
+}
+
+/// Clears any active pending administrator proposal (Issue #738).
+pub fn clear_pending_admin(env: &Env) {
+    env.storage()
+        .instance()
+        .remove(&StorageKey::Admin(AdminKey::PendingAdmin));
+    env.storage().instance().remove(&PENDING_ADMIN_KEY);
+}
 
 /// Writes the admin key. When this replaces an existing, different admin
 /// (a mid-flight handover via admin recovery or any other transfer path),
@@ -40,6 +45,7 @@ const ADMIN_RENOUNCED_KEY: soroban_sdk::Symbol = symbol_short!("adm_none");
 pub fn set_admin(env: &Env, admin: &Address) {
     let previous: Option<Address> = env.storage().instance().get(&DataKey::Admin);
     env.storage().instance().set(&DataKey::Admin, admin);
+    clear_pending_admin(env);
     if let Some(previous) = previous {
         if &previous != admin {
             invalidate_pending_timelocked_actions(env, &previous, admin);
@@ -99,6 +105,7 @@ pub fn renounce(env: &Env, expected_admin: &Address) -> Result<(), VaultError> {
     env.storage().instance().set(&ADMIN_RENOUNCED_KEY, &true);
     env.storage().instance().remove(&DataKey::Admin);
     env.storage().instance().remove(&symbol_short!("emg_adm"));
+    clear_pending_admin(env);
     Ok(())
 }
 

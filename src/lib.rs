@@ -21,6 +21,7 @@ mod events;
 pub mod example_consumer;
 pub mod interface;
 pub mod nft;
+pub mod reward_accumulator;
 mod reward_math;
 mod storage;
 pub mod vault;
@@ -120,6 +121,9 @@ mod test_storage_layout;
 // ── Issue #660: resource-footprint limits for batch/loop entrypoints ─────────
 #[cfg(test)]
 mod test_resource_footprint;
+
+#[cfg(test)]
+mod test_issues_646_650_737_738;
 
 /// Pure math surfaces exposed for property tests and `cargo-fuzz` (issue #661).
 ///
