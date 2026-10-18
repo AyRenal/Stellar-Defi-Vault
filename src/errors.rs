@@ -211,6 +211,9 @@ pub enum VaultLockError {
     InvalidLockBoostSchedule = 53,
     TooManyLockBoostTiers = 54,
     LockAlreadyActive = 55,
+    /// Returned by `lock_position()` while the pool is in withdraw-only mode
+    /// (issue #705).
+    WithdrawOnlyMode = 56,
 }
 
 /// Soroban caps every `#[contracterror]`/`#[contracttype]` enum at 50 variants
@@ -1061,6 +1064,9 @@ pub enum VaultFeature5Error {
     /// Replaces `panic!("NotNFTOwner")` — returned by `redeem_position_nft()`
     /// when the caller is not the recorded owner of the token id (issue #505).
     NotNftOwner = 10,
+    /// Returned by `compound()` while the pool is in withdraw-only mode
+    /// (issue #705).
+    WithdrawOnlyMode = 11,
 }
 
 impl From<VaultError> for VaultFeature5Error {
@@ -1069,6 +1075,83 @@ impl From<VaultError> for VaultFeature5Error {
             VaultError::Unauthorized => VaultFeature5Error::Unauthorized,
             VaultError::NotInitialized => VaultFeature5Error::NotInitialized,
             _ => VaultFeature5Error::Unauthorized,
+        }
+    }
+}
+
+/// Error enum for issues #697-#700 (share allowances, keeper authorization,
+/// extra reward tokens, reward epochs). `VaultError` is at Soroban's
+/// 50-variant cap, so these cases get their own enum, matching
+/// `VaultFeature2Error`..`VaultFeature5Error`.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum VaultFeature6Error {
+    /// Mirrors `VaultError::Unauthorized`.
+    Unauthorized = 1,
+    /// Mirrors `VaultError::NotInitialized`.
+    NotInitialized = 2,
+    /// Mirrors `VaultError::ZeroAmount`.
+    ZeroAmount = 3,
+    /// Mirrors `VaultError::InsufficientShares`.
+    InsufficientShares = 4,
+    /// Mirrors `VaultError::VaultPaused`.
+    VaultPaused = 5,
+    /// Mirrors `VaultError::ArithmeticError`.
+    ArithmeticError = 6,
+    /// Mirrors `VaultError::WithdrawalLimitExceeded`.
+    WithdrawalLimitExceeded = 7,
+    /// Mirrors `VaultError::UseCooldownFlow`.
+    UseCooldownFlow = 8,
+    /// Mirrors `VaultError::BelowMinimumStake`.
+    BelowMinimumStake = 9,
+    /// Returned by `approve_withdrawal()` for a negative share amount (issue #697).
+    InvalidAmount = 10,
+    /// Returned by `approve_withdrawal()` when `expires_at` is not in the
+    /// future (issue #697).
+    InvalidExpiry = 11,
+    /// Returned by `withdraw_from()` when the allowance has expired (issue #697).
+    AllowanceExpired = 12,
+    /// Returned by `withdraw_from()` when no allowance exists or it is smaller
+    /// than the requested shares (issue #697).
+    InsufficientAllowance = 13,
+    /// Returned by `authorize_keeper()` when the user already has three
+    /// authorized keepers (issue #698).
+    KeeperLimitReached = 14,
+    /// Returned by `claim_for()` / `compound_for()` when the keeper is not
+    /// authorized by the user (issue #698).
+    KeeperNotAuthorized = 15,
+    /// Returned by `compound_for()` when the user has not enabled
+    /// auto-compounding (issue #698).
+    AutoCompoundNotEnabled = 16,
+    /// Returned by `add_reward_token()` when three extra tokens are already
+    /// configured (issue #699).
+    RewardTokenLimitReached = 17,
+    /// Returned by `add_reward_token()` for a token that is already configured
+    /// (issue #699).
+    RewardTokenAlreadyAdded = 18,
+    /// Returned when the token is not a configured extra reward token (issue #699).
+    RewardTokenNotFound = 19,
+    /// Returned by `add_reward_token()` for a zero rate or one above
+    /// `MAX_RATE_BPS` (issue #699).
+    InvalidRate = 20,
+    /// Returned by `set_epoch_config()` for a zero length or negative budget
+    /// (issue #700).
+    InvalidEpochConfig = 21,
+}
+
+impl From<VaultError> for VaultFeature6Error {
+    fn from(err: VaultError) -> Self {
+        match err {
+            VaultError::NotInitialized => VaultFeature6Error::NotInitialized,
+            VaultError::ZeroAmount => VaultFeature6Error::ZeroAmount,
+            VaultError::InsufficientShares => VaultFeature6Error::InsufficientShares,
+            VaultError::VaultPaused => VaultFeature6Error::VaultPaused,
+            VaultError::ArithmeticError => VaultFeature6Error::ArithmeticError,
+            VaultError::WithdrawalLimitExceeded => VaultFeature6Error::WithdrawalLimitExceeded,
+            VaultError::UseCooldownFlow => VaultFeature6Error::UseCooldownFlow,
+            VaultError::BelowMinimumStake => VaultFeature6Error::BelowMinimumStake,
+            _ => VaultFeature6Error::Unauthorized,
         }
     }
 }
@@ -1097,4 +1180,78 @@ pub enum VaultInvariantError {
     /// A `balance::set_*` accounting field would have been written as
     /// negative; the write was rejected and the call reverted instead.
     NegativeBalance = 1,
+}
+
+/// Thirteenth error enum, for issues #705-#708 (withdraw-only mode, position
+/// split/merge, beneficiary inheritance, dust cleanup). Every earlier
+/// `#[contracterror]` enum is at Soroban's 50-variant cap or scoped to another
+/// feature batch, so these cases get their own enum, plus mirrors of the
+/// `VaultError` cases the new entrypoints can also hit (via the `From` impl
+/// below, so `?` still works at call sites).
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum VaultSafetyError {
+    /// Mirrors `VaultError::Unauthorized`.
+    Unauthorized = 1,
+    /// Mirrors `VaultError::NotInitialized`.
+    NotInitialized = 2,
+    /// Returned when a ledger count or amount that must be positive is not.
+    ZeroAmount = 3,
+    /// Mirrors `VaultError::ArithmeticError`.
+    ArithmeticError = 4,
+    /// Mirrors `VaultError::PositionNotFound`; also returned for an unknown
+    /// position id (issue #706).
+    PositionNotFound = 5,
+    /// Mirrors `VaultError::VaultPaused`.
+    VaultPaused = 6,
+    /// Mirrors `VaultError::MaxPositionsReached` (issue #706).
+    MaxPositionsReached = 7,
+    /// Returned by `split_position()` when `shares` is not strictly between 0
+    /// and the size of the position being split (issue #706).
+    InvalidSplitAmount = 8,
+    /// Returned by `merge_positions()` when the two ids are equal or the
+    /// positions carry different lock/boost parameters (issue #706).
+    IncompatiblePositions = 9,
+    /// Returned by `set_beneficiary()` when the beneficiary is the owner
+    /// (issue #707).
+    InvalidBeneficiary = 10,
+    /// Returned by `clear_beneficiary()` / `claim_inheritance()` when no
+    /// beneficiary is set (issue #707).
+    NoBeneficiary = 11,
+    /// Returned by `claim_inheritance()` before `last_interaction +
+    /// inactivity_ledgers` has been reached (issue #707).
+    InactivityPeriodNotElapsed = 12,
+    /// Mirrors `VaultError::RecipientAlreadyStaking` (issue #707).
+    RecipientAlreadyStaking = 13,
+    /// Returned by `close_dust_position()` when no dust threshold is set
+    /// (issue #708).
+    DustThresholdNotSet = 14,
+    /// Returned by `close_dust_position()` when the position is at or above
+    /// the dust threshold (issue #708).
+    NotDustPosition = 15,
+    /// Returned by `close_dust_position()` while the position is locked
+    /// (issue #708).
+    PositionLocked = 16,
+    /// Returned by `set_dust_keeper_tip_bps()` above the 1 000 bps cap
+    /// (issue #708).
+    InvalidTipBps = 17,
+    /// Returned by `close_dust_position()` while the position has escrowed
+    /// rewards pending release, which closing would forfeit (issue #708).
+    EscrowPending = 18,
+}
+
+impl From<VaultError> for VaultSafetyError {
+    fn from(err: VaultError) -> Self {
+        match err {
+            VaultError::Unauthorized => VaultSafetyError::Unauthorized,
+            VaultError::NotInitialized => VaultSafetyError::NotInitialized,
+            VaultError::ArithmeticError => VaultSafetyError::ArithmeticError,
+            VaultError::PositionNotFound => VaultSafetyError::PositionNotFound,
+            VaultError::VaultPaused => VaultSafetyError::VaultPaused,
+            VaultError::MaxPositionsReached => VaultSafetyError::MaxPositionsReached,
+            VaultError::RecipientAlreadyStaking => VaultSafetyError::RecipientAlreadyStaking,
+            _ => VaultSafetyError::Unauthorized,
+        }
+    }
 }

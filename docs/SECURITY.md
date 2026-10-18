@@ -24,6 +24,22 @@ Flips the `Paused` flag back to `false`.
 
 **Emits:** `unpaused` event with the admin address.
 
+### `enter_withdraw_only_mode(admin)` / `exit_withdraw_only_mode(admin)`
+
+Switches the pool into, and back out of, withdraw-only mode.
+
+**Effect:** While active, deposits, staking, compounding, locking and reward auto-restake are rejected, while withdrawals and claims stay open and their fees are waived. Unlike `pause()`, user funds are never frozen. Unlike `initiate_sunset()`, the mode is immediate, has no deadline and can be reversed by the admin. `get_pool_mode()` reports `Normal`, `Paused` or `WithdrawOnly`.
+
+**Emits:** `wd_only` event with the admin address, the new state and the ledger sequence.
+
+### `set_dust_threshold(admin, amount)` / `set_dust_keeper_tip_bps(admin, bps)` / `set_dust_treasury(admin, treasury)`
+
+Configure dust cleanup. A keeper may call `close_dust_position(keeper, user)` for a position worth less than the threshold, without the owner's signature.
+
+**Effect:** The position's whole value is paid to the owner (or to the dust treasury if one is set), less a keeper tip capped at 10%. Locked positions cannot be closed, and accrued rewards stay claimable by the owner.
+
+**Emits:** `dust_clos` event with the amount paid out, the keeper tip and the ledger sequence.
+
 ### `add_yield(admin_addr, amount)`
 
 Transfers `amount` tokens **from the admin's own wallet** into the vault contract, then increments `total_deposited` by the same amount without minting new shares.

@@ -5410,7 +5410,7 @@ fn test_non_admin_cannot_propose() {
 #[test]
 fn test_set_halving_schedule_sets_config() {
     let f = VaultFixture::new();
-    f.vault.set_halving_schedule(&f.admin, &100_000, &100); // floor = 1% APR
+    f.vault.set_halving_schedule(&f.admin, &100_000, &5_000, &100); // floor = 1% APR
 
     let config = f.vault.get_halving_config().unwrap();
     assert_eq!(config.interval_ledgers, 100_000);
@@ -5435,14 +5435,14 @@ fn test_next_halving_at_is_none_without_schedule() {
 #[test]
 fn test_next_halving_at_returns_first_boundary() {
     let f = VaultFixture::new();
-    f.vault.set_halving_schedule(&f.admin, &50_000, &100);
+    f.vault.set_halving_schedule(&f.admin, &50_000, &5_000, &100);
     assert_eq!(f.vault.next_halving_at().unwrap(), 50_000);
 }
 
 #[test]
 fn test_halving_count_is_correct_at_boundary() {
     let f = VaultFixture::new();
-    f.vault.set_halving_schedule(&f.admin, &10_000, &100);
+    f.vault.set_halving_schedule(&f.admin, &10_000, &5_000, &100);
     // set_halving_schedule stores started_at = current ledger (0)
     set_ledger(&f.env, 5_000);
     assert_eq!(f.vault.get_current_halving_count(), 0);
@@ -5459,14 +5459,14 @@ fn test_halving_count_is_correct_at_boundary() {
              protocol layer in production."]
 fn test_non_admin_cannot_set_halving_schedule() {
     let f = VaultFixture::new();
-    let result = f.vault.try_set_halving_schedule(&f.alice, &10_000, &100);
+    let result = f.vault.try_set_halving_schedule(&f.alice, &10_000, &5_000, &100);
     assert_eq!(result, Err(Ok(VaultError::Unauthorized)));
 }
 
 #[test]
 fn test_set_halving_schedule_zero_interval_rejected() {
     let f = VaultFixture::new();
-    let result = f.vault.try_set_halving_schedule(&f.admin, &0, &100);
+    let result = f.vault.try_set_halving_schedule(&f.admin, &0, &5_000, &100);
     assert_eq!(result, Err(Ok(VaultError::ZeroAmount)));
 }
 
@@ -5475,7 +5475,7 @@ fn test_halving_reduces_pending_rewards() {
     let f = VaultFixture::new();
     setup_reward_pool(&f);
     // Set halving: very short interval so halving occurs mid-window
-    f.vault.set_halving_schedule(&f.admin, &500, &1); // floor = 0.01%
+    f.vault.set_halving_schedule(&f.admin, &500, &5_000, &1); // floor = 0.01%
 
     // Alice stakes
     f.vault.stake(&f.alice, &1_000_000, &0);
@@ -5490,7 +5490,7 @@ fn test_halving_reduces_pending_rewards() {
 #[test]
 fn test_halving_count_increments_over_multiple_intervals() {
     let f = VaultFixture::new();
-    f.vault.set_halving_schedule(&f.admin, &10_000, &100);
+    f.vault.set_halving_schedule(&f.admin, &10_000, &5_000, &100);
     assert_eq!(f.vault.get_current_halving_count(), 0);
 
     set_ledger(&f.env, 10_000);
@@ -5509,7 +5509,7 @@ fn test_halving_honors_floor_rate() {
     setup_reward_pool(&f);
     // Rate is 1000 bps (10% APR), floor at 10 bps (0.1% APR)
     // interval_ledgers=10 means halving every 10 ledgers
-    f.vault.set_halving_schedule(&f.admin, &10, &10);
+    f.vault.set_halving_schedule(&f.admin, &10, &5_000, &10);
 
     // After enough halvings, rate should be floored at 10 bps
     // 1000 -> 500 -> 250 -> 125 -> 62 -> 31 -> 15 -> 7 -> 3 -> 1 -> 0? No, floor=10
@@ -5524,7 +5524,7 @@ fn test_halving_honors_floor_rate() {
 fn test_halving_with_boost_schedule() {
     let f = VaultFixture::new();
     setup_reward_pool(&f);
-    f.vault.set_halving_schedule(&f.admin, &500, &1);
+    f.vault.set_halving_schedule(&f.admin, &500, &5_000, &1);
 
     // Set a boost schedule
     let schedule = boost_schedule(&f.env, &[(200, 20_000)]);
