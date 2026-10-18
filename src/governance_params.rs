@@ -7,9 +7,10 @@
 //! against quorum first, then support against the threshold; a threshold of
 //! exactly `pass_threshold_bps` passes.
 //!
-//! The parameters in force when a proposal is created are snapshotted for that
-//! proposal, so changing them mid-vote does not apply to it. A proposal created
-//! while no parameters are configured keeps the original rule
+//! The parameters in force when a proposal is created, and the total staked
+//! amount quorum is measured against, are snapshotted for that proposal, so
+//! changing them or moving the pool size mid-vote does not apply to it. A
+//! proposal created while no parameters are configured keeps the original rule
 //! (`votes_for > votes_against`, no quorum).
 //!
 //! # Storage
@@ -31,6 +32,10 @@ const PARAMS_KEY: Symbol = symbol_short!("gv_cfg");
 /// `(SNAPSHOT_KEY, proposal_id)`.
 const SNAPSHOT_KEY: Symbol = symbol_short!("gv_snap");
 
+/// Persistent-storage key prefix for the total deposited when a proposal was
+/// created, keyed by `(SNAPSHOT_BASE_KEY, proposal_id)`.
+const SNAPSHOT_BASE_KEY: Symbol = symbol_short!("gv_base");
+
 const BPS_BASE: i128 = 10_000;
 
 /// Quorum and pass threshold, both in basis points.
@@ -45,13 +50,17 @@ fn get_params(env: &Env) -> Option<GovernanceParams> {
     env.storage().instance().get(&PARAMS_KEY)
 }
 
-/// Snapshot the current parameters for a newly created proposal. Does nothing
-/// when no parameters are configured.
+/// Snapshot the current parameters and total deposited for a newly created
+/// proposal. Does nothing when no parameters are configured.
 pub fn snapshot(env: &Env, proposal_id: u32) {
     if let Some(params) = get_params(env) {
         env.storage()
             .persistent()
             .set(&(SNAPSHOT_KEY, proposal_id), &params);
+        env.storage().persistent().set(
+            &(SNAPSHOT_BASE_KEY, proposal_id),
+            &balance::get_total_deposited(env),
+        );
     }
 }
 
@@ -82,7 +91,12 @@ pub fn passes(
     let participation = total_votes
         .checked_mul(BPS_BASE)
         .ok_or(VaultError::ArithmeticError)?;
-    let required = balance::get_total_deposited(env)
+    let total_staked = env
+        .storage()
+        .persistent()
+        .get::<_, i128>(&(SNAPSHOT_BASE_KEY, proposal_id))
+        .unwrap_or(0);
+    let required = total_staked
         .checked_mul(params.quorum_bps as i128)
         .ok_or(VaultError::ArithmeticError)?;
     if participation < required {

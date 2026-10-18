@@ -276,6 +276,25 @@ fn twab_rejects_empty_and_future_windows() {
     );
 }
 
+#[test]
+fn twab_rejects_windows_starting_before_pruned_history() {
+    let f = Fixture::new();
+    let alice = Address::generate(&f.env);
+
+    let count = MAX_CHECKPOINTS + 5;
+    for i in 1..=count {
+        f.deposit_at(&alice, 10, i);
+    }
+    f.set_ledger(count);
+
+    // Ledger 1 predates the oldest retained checkpoint (6).
+    assert_eq!(
+        f.vault.try_get_twab(&alice, &1, &count),
+        Err(Ok(VaultError::EpochNotFinalized))
+    );
+    assert!(f.vault.try_get_twab(&alice, &60, &count).is_ok());
+}
+
 // ── Issue #711: stake and unstake hooks ──────────────────────────────────────
 
 #[test]

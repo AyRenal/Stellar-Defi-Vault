@@ -23,9 +23,10 @@
 //! - A write in the same ledger as the latest checkpoint overwrites it.
 //! - A write that leaves the balance unchanged records nothing.
 //! - A list holds at most [`MAX_CHECKPOINTS`] entries; the oldest is dropped
-//!   first. Both rules above are exact. The cap is not: ledgers older than the
-//!   oldest retained checkpoint read as zero. `cumulative` is absolute, so
-//!   windows that lie inside the retained range stay exact.
+//!   first. Both rules above are exact. The cap is not: `balance_at` reads zero
+//!   for ledgers older than the oldest retained checkpoint. `cumulative` is
+//!   absolute, so TWAB windows that lie inside the retained range stay exact,
+//!   and a window that starts before it is rejected rather than overstated.
 //!
 //! # Storage
 //!
@@ -143,6 +144,14 @@ fn twab_in(
         return Err(VaultError::ZeroAmount);
     }
     if to_ledger > env.ledger().sequence() {
+        return Err(VaultError::EpochNotFinalized);
+    }
+    // The oldest checkpoint of an unpruned list starts at cumulative 0, so a
+    // non-zero start means older history was dropped and this window's start
+    // cannot be answered exactly.
+    if find(history, from_ledger).is_none()
+        && history.first().map_or(false, |c| c.cumulative != 0)
+    {
         return Err(VaultError::EpochNotFinalized);
     }
     let accumulated =
