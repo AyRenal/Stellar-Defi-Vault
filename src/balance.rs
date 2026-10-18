@@ -37,6 +37,7 @@ pub fn set_shares(env: &Env, user: &Address, amount: i128) {
     env.storage()
         .persistent()
         .set(&DataKey::ShareBalance(user.clone()), &amount);
+    crate::balance_checkpoints::record_user(env, user, amount);
 }
 
 pub fn get_total_shares(env: &Env) -> i128 {
@@ -49,6 +50,7 @@ pub fn get_total_shares(env: &Env) -> i128 {
 pub fn set_total_shares(env: &Env, total: i128) {
     assert_non_negative(env, total);
     env.storage().instance().set(&DataKey::TotalShares, &total);
+    crate::balance_checkpoints::record_total(env, total);
 }
 
 pub fn get_total_deposited(env: &Env) -> i128 {

@@ -145,6 +145,29 @@ Emitted when the admin sets a new per-transaction withdrawal limit.
 | data.0 | i128 | new limit in shares |
 | data.1 | u32 | ledger sequence |
 
+### `hook_fail` — hook_failed
+Emitted when a registered stake/unstake hook contract fails; the user's action still succeeds.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| topic[0] | Symbol | `"hook_fail"` |
+| topic[1] | Address | user |
+| data.0 | Address | hook contract |
+| data.1 | Symbol | `"stake"` or `"unstake"` |
+| data.2 | i128 | amount |
+| data.3 | u32 | ledger sequence |
+
+### `gov_par` — governance_params_updated
+Emitted when the admin sets the governance quorum and pass threshold.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| topic[0] | Symbol | `"gov_par"` |
+| topic[1] | Address | admin |
+| data.0 | u32 | quorum in basis points |
+| data.1 | u32 | pass threshold in basis points |
+| data.2 | u32 | ledger sequence |
+
 ### Pool-wide event topics
 
 Events that do not have a single user or administrator as their primary
