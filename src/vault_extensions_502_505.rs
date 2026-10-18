@@ -202,6 +202,10 @@ impl VaultContract {
     }
 
     pub fn compound(env: Env, user: Address) -> Result<(), VaultFeature5Error> {
+        // Issue #705: compounding re-stakes rewards, which is an inflow.
+        if crate::vault::withdraw_only_mode::is_active(&env) {
+            return Err(VaultFeature5Error::WithdrawOnlyMode);
+        }
         let enabled: bool = env
             .storage()
             .persistent()

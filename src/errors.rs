@@ -211,6 +211,9 @@ pub enum VaultLockError {
     InvalidLockBoostSchedule = 53,
     TooManyLockBoostTiers = 54,
     LockAlreadyActive = 55,
+    /// Returned by `lock_position()` while the pool is in withdraw-only mode
+    /// (issue #705).
+    WithdrawOnlyMode = 56,
 }
 
 /// Soroban caps every `#[contracterror]`/`#[contracttype]` enum at 50 variants
@@ -1061,6 +1064,9 @@ pub enum VaultFeature5Error {
     /// Replaces `panic!("NotNFTOwner")` — returned by `redeem_position_nft()`
     /// when the caller is not the recorded owner of the token id (issue #505).
     NotNftOwner = 10,
+    /// Returned by `compound()` while the pool is in withdraw-only mode
+    /// (issue #705).
+    WithdrawOnlyMode = 11,
 }
 
 impl From<VaultError> for VaultFeature5Error {
@@ -1097,4 +1103,75 @@ pub enum VaultInvariantError {
     /// A `balance::set_*` accounting field would have been written as
     /// negative; the write was rejected and the call reverted instead.
     NegativeBalance = 1,
+}
+
+/// Thirteenth error enum, for issues #705-#708 (withdraw-only mode, position
+/// split/merge, beneficiary inheritance, dust cleanup). Every earlier
+/// `#[contracterror]` enum is at Soroban's 50-variant cap or scoped to another
+/// feature batch, so these cases get their own enum, plus mirrors of the
+/// `VaultError` cases the new entrypoints can also hit (via the `From` impl
+/// below, so `?` still works at call sites).
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum VaultSafetyError {
+    /// Mirrors `VaultError::Unauthorized`.
+    Unauthorized = 1,
+    /// Mirrors `VaultError::NotInitialized`.
+    NotInitialized = 2,
+    /// Returned when a ledger count or amount that must be positive is not.
+    ZeroAmount = 3,
+    /// Mirrors `VaultError::ArithmeticError`.
+    ArithmeticError = 4,
+    /// Mirrors `VaultError::PositionNotFound`; also returned for an unknown
+    /// position id (issue #706).
+    PositionNotFound = 5,
+    /// Mirrors `VaultError::VaultPaused`.
+    VaultPaused = 6,
+    /// Mirrors `VaultError::MaxPositionsReached` (issue #706).
+    MaxPositionsReached = 7,
+    /// Returned by `split_position()` when `shares` is not strictly between 0
+    /// and the size of the position being split (issue #706).
+    InvalidSplitAmount = 8,
+    /// Returned by `merge_positions()` when the two ids are equal or the
+    /// positions carry different lock/boost parameters (issue #706).
+    IncompatiblePositions = 9,
+    /// Returned by `set_beneficiary()` when the beneficiary is the owner
+    /// (issue #707).
+    InvalidBeneficiary = 10,
+    /// Returned by `clear_beneficiary()` / `claim_inheritance()` when no
+    /// beneficiary is set (issue #707).
+    NoBeneficiary = 11,
+    /// Returned by `claim_inheritance()` before `last_interaction +
+    /// inactivity_ledgers` has been reached (issue #707).
+    InactivityPeriodNotElapsed = 12,
+    /// Mirrors `VaultError::RecipientAlreadyStaking` (issue #707).
+    RecipientAlreadyStaking = 13,
+    /// Returned by `close_dust_position()` when no dust threshold is set
+    /// (issue #708).
+    DustThresholdNotSet = 14,
+    /// Returned by `close_dust_position()` when the position is at or above
+    /// the dust threshold (issue #708).
+    NotDustPosition = 15,
+    /// Returned by `close_dust_position()` while the position is locked
+    /// (issue #708).
+    PositionLocked = 16,
+    /// Returned by `set_dust_keeper_tip_bps()` above the 1 000 bps cap
+    /// (issue #708).
+    InvalidTipBps = 17,
+}
+
+impl From<VaultError> for VaultSafetyError {
+    fn from(err: VaultError) -> Self {
+        match err {
+            VaultError::Unauthorized => VaultSafetyError::Unauthorized,
+            VaultError::NotInitialized => VaultSafetyError::NotInitialized,
+            VaultError::ArithmeticError => VaultSafetyError::ArithmeticError,
+            VaultError::PositionNotFound => VaultSafetyError::PositionNotFound,
+            VaultError::VaultPaused => VaultSafetyError::VaultPaused,
+            VaultError::MaxPositionsReached => VaultSafetyError::MaxPositionsReached,
+            VaultError::RecipientAlreadyStaking => VaultSafetyError::RecipientAlreadyStaking,
+            _ => VaultSafetyError::Unauthorized,
+        }
+    }
 }

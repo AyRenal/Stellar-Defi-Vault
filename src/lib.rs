@@ -102,6 +102,11 @@ mod test_issues_459_462;
 #[cfg(test)]
 mod test_peg_stabilization;
 
+// Issues #705-#708: withdraw-only mode, position split/merge, beneficiary
+// inheritance and dust cleanup.
+#[cfg(test)]
+mod test_issues_705_708;
+
 // ── Issue #659: storage-layout upgrade-safety snapshot ───────────────────────
 #[cfg(test)]
 mod test_storage_layout;

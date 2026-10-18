@@ -145,6 +145,58 @@ Emitted when the admin sets a new per-transaction withdrawal limit.
 | data.0 | i128 | new limit in shares |
 | data.1 | u32 | ledger sequence |
 
+### `wd_only` — withdraw_only_mode_changed
+Emitted when the admin enters or exits withdraw-only mode.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| topic[0] | Symbol | `"wd_only"` |
+| topic[1] | Address | admin |
+| data.0 | bool | `true` when entering, `false` when exiting |
+| data.1 | u32 | ledger sequence |
+
+### `ben_set` — beneficiary_set
+Emitted when a user designates a beneficiary.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| topic[0] | Symbol | `"ben_set"` |
+| topic[1] | Address | position owner |
+| data.0 | Address | beneficiary |
+| data.1 | u32 | inactivity period in ledgers |
+| data.2 | u32 | ledger sequence |
+
+### `ben_clr` — beneficiary_cleared
+Emitted when a user removes their beneficiary.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| topic[0] | Symbol | `"ben_clr"` |
+| topic[1] | Address | position owner |
+| data.0 | u32 | ledger sequence |
+
+### `ben_claim` — inheritance_claimed
+Emitted when a beneficiary takes over an inactive owner's position. The
+position move itself also emits `pos_xf_rw`.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| topic[0] | Symbol | `"ben_claim"` |
+| topic[1] | Address | previous owner |
+| data.0 | Address | beneficiary |
+| data.1 | u32 | ledger sequence |
+
+### `dust_clos` — dust_position_closed
+Emitted when a keeper closes a dust position. `pos_clos` is emitted too.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| topic[0] | Symbol | `"dust_clos"` |
+| topic[1] | Address | position owner |
+| data.0 | i128 | amount paid to the owner or dust treasury |
+| data.1 | i128 | keeper tip |
+| data.2 | u32 | ledger sequence |
+
 ### Pool-wide event topics
 
 Events that do not have a single user or administrator as their primary
