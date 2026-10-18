@@ -6255,9 +6255,21 @@ impl VaultContract {
 
     /// Claim for `user` without their signature, for callers that have
     /// already checked their own authorization (issue #698). Rewards are paid
-    /// by `do_claim` to `user`, never to the caller.
+    /// by `do_claim` to `user`, never to the caller. Applies the same guard,
+    /// rate limit and large-claim queue as `claim`, so delegating a claim
+    /// cannot bypass them.
     pub(crate) fn claim_for_user(env: &Env, user: &Address) -> Result<i128, VaultError> {
-        Self::do_claim(env, user)
+        let _guard = ReentrancyGuard::new(env)?;
+        Self::check_claim_rate_limit(env, user);
+        if crate::mev_claim_protection::maybe_queue_large_claim(env, user)? {
+            balance::set_last_claim_action_ledger(env, user, env.ledger().sequence());
+            return Ok(0);
+        }
+        let result = Self::do_claim(env, user);
+        if result.is_ok() {
+            balance::set_last_claim_action_ledger(env, user, env.ledger().sequence());
+        }
+        result
     }
 
     fn do_unstake(env: &Env, staker: &Address, shares: i128) -> Result<i128, VaultError> {
