@@ -3283,17 +3283,23 @@ impl VaultContract {
     // ── Issue #231: Halving Schedule ──────────────────────────────────────────
 
     /// Admin: set the halving schedule for reward rate reduction.
-    /// `interval_ledgers` specifies how often rewards halve.
-    /// `floor_rate_bps` is the minimum rate enforced after halving.
+    /// `interval_ledgers` specifies how often the rate is reduced.
+    /// `reduction_bps` is the share of the current rate removed at each
+    /// interval (issue #701), between `1` and `10_000`; `5_000` is a classic
+    /// halving. `floor_rate_bps` is the minimum rate enforced after reductions.
     pub fn set_halving_schedule(
         env: Env,
         admin: Address,
         interval_ledgers: u32,
+        reduction_bps: u32,
         floor_rate_bps: i128,
     ) -> Result<(), VaultError> {
         admin::require_admin_as(&env, &admin)?;
         if interval_ledgers == 0 {
             return Err(VaultError::ZeroAmount);
+        }
+        if reduction_bps == 0 || reduction_bps > BOOST_BPS_BASE {
+            return Err(VaultError::InvalidRate);
         }
         if floor_rate_bps < 0 {
             return Err(VaultError::ZeroAmount);
@@ -3305,6 +3311,7 @@ impl VaultContract {
             floor_rate_bps,
         };
         balance::set_halving_config(&env, &config);
+        balance::set_halving_reduction_bps(&env, reduction_bps);
         Ok(())
     }
 
@@ -6282,8 +6289,41 @@ impl VaultContract {
         Ok(shares)
     }
 
+    /// Claim for `user` without their signature, for callers that have
+    /// already checked their own authorization (issue #698). Rewards are paid
+    /// by `do_claim` to `user`, never to the caller. Applies the same guard,
+    /// rate limit and large-claim queue as `claim`, so delegating a claim
+    /// cannot bypass them.
+    pub(crate) fn claim_for_user(env: &Env, user: &Address) -> Result<i128, VaultError> {
+        let _guard = ReentrancyGuard::new(env)?;
+        Self::check_claim_rate_limit(env, user);
+        if crate::mev_claim_protection::maybe_queue_large_claim(env, user)? {
+            balance::set_last_claim_action_ledger(env, user, env.ledger().sequence());
+            return Ok(0);
+        }
+        let result = Self::do_claim(env, user);
+        if result.is_ok() {
+            balance::set_last_claim_action_ledger(env, user, env.ledger().sequence());
+        }
+        result
+    }
+
     fn do_unstake(env: &Env, staker: &Address, shares: i128) -> Result<i128, VaultError> {
         staker.require_auth();
+        Self::do_unstake_to(env, staker, shares, staker)
+    }
+
+    /// Unstake logic shared by `do_unstake` and `withdraw_from` (issue #697).
+    ///
+    /// Burns `staker`'s `shares` and pays the proceeds to `recipient`. It does
+    /// not authenticate `staker`: callers must have authorized the call
+    /// themselves (the owner, or a spender holding a withdrawal allowance).
+    pub(crate) fn do_unstake_to(
+        env: &Env,
+        staker: &Address,
+        shares: i128,
+        recipient: &Address,
+    ) -> Result<i128, VaultError> {
         Self::maybe_emit_position_expired(env, staker);
 
         // Reject unstake if user has an outstanding debt NFT.
@@ -6433,9 +6473,14 @@ impl VaultContract {
         Self::check_activation(env);
 
         if unstake_fee > 0 {
+            // Issue #704: the insurance share comes off the top, before the
+            // revenue-share and treasury routing of the remainder.
+            let insurance_share =
+                crate::vault_extensions_701_704::take_insurance_share(env, unstake_fee)?;
+            let distributable_fee = unstake_fee - insurance_share;
             let rev_share_portion = if let Some(rev_cfg) = balance::get_revenue_sharing_config(env) {
                 if rev_cfg.share_bps > 0 {
-                    (unstake_fee * rev_cfg.share_bps as i128) / BOOST_BPS_BASE as i128
+                    (distributable_fee * rev_cfg.share_bps as i128) / BOOST_BPS_BASE as i128
                 } else {
                     0
                 }
@@ -6443,7 +6488,7 @@ impl VaultContract {
                 0
             };
 
-            let treasury_fee = unstake_fee - rev_share_portion;
+            let treasury_fee = distributable_fee - rev_share_portion;
             if rev_share_portion > 0 {
                 let rev_pool = balance::get_revenue_share_pool(env);
                 balance::set_revenue_share_pool(env, rev_pool + rev_share_portion);
@@ -6490,7 +6535,7 @@ impl VaultContract {
         Self::append_stake_history(env, staker, StakeAction::Unstake, amount_returned);
 
         let token_client = token::Client::new(env, &token_addr);
-        token_client.transfer(&env.current_contract_address(), staker, &amount_returned);
+        token_client.transfer(&env.current_contract_address(), recipient, &amount_returned);
 
         events::withdraw(
             env,
@@ -6642,6 +6687,8 @@ impl VaultContract {
             current_ledger,
             true,
         )?;
+        // Issue #700: clamp to the current epoch's remaining emission budget.
+        let additional_reward = crate::vault::reward_epochs::apply_budget(env, additional_reward);
 
         if additional_reward > 0 {
             let accrued = balance::get_accrued_reward(env, user);
@@ -8307,11 +8354,14 @@ impl VaultContract {
             ))
             .unwrap_or(0);
 
-        user_staked
+        let reward = user_staked
             .checked_mul(reward_factor)
             .unwrap_or(0)
             .checked_div(1_000_000_000_000i128)
-            .unwrap_or(0)
+            .unwrap_or(0);
+        // Issue #702: per-address cap on a single epoch's reward. The excess is
+        // never debited from the reward pool, so it stays in the pool.
+        crate::vault_extensions_701_704::apply_user_epoch_cap(&env, reward)
     }
 
     pub fn claim_epoch_rewards(env: Env, user: Address) -> Result<i128, VaultError> {
@@ -13156,8 +13206,15 @@ impl VaultContract {
         balance::set_total_deposited(env, total_deposited - amount);
         if fee > 0 {
             balance::add_protocol_fee_collected(env, fee);
-            let treasury_share = crate::community_treasury::route_fee_revenue(env, fee)?;
-            let remaining_fee = fee
+            // Issue #704: the insurance share comes off the top of the fee.
+            let insurance_share =
+                crate::vault_extensions_701_704::take_insurance_share(env, fee)?;
+            let distributable_fee = fee
+                .checked_sub(insurance_share)
+                .ok_or(VaultError::ArithmeticError)?;
+            let treasury_share =
+                crate::community_treasury::route_fee_revenue(env, distributable_fee)?;
+            let remaining_fee = distributable_fee
                 .checked_sub(treasury_share)
                 .ok_or(VaultError::ArithmeticError)?;
             
@@ -14433,8 +14490,15 @@ pub fn get_reward_threshold(env: Env) -> i128 {
 
         if fee > 0 {
             balance::add_protocol_fee_collected(&env, fee);
-            let treasury_share = crate::community_treasury::route_fee_revenue(&env, fee)?;
-            let remaining_fee = fee
+            // Issue #704: the insurance share comes off the top of the fee.
+            let insurance_share =
+                crate::vault_extensions_701_704::take_insurance_share(&env, fee)?;
+            let distributable_fee = fee
+                .checked_sub(insurance_share)
+                .ok_or(VaultError::ArithmeticError)?;
+            let treasury_share =
+                crate::community_treasury::route_fee_revenue(&env, distributable_fee)?;
+            let remaining_fee = distributable_fee
                 .checked_sub(treasury_share)
                 .ok_or(VaultError::ArithmeticError)?;
             
