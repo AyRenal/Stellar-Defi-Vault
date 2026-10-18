@@ -3269,17 +3269,23 @@ impl VaultContract {
     // ── Issue #231: Halving Schedule ──────────────────────────────────────────
 
     /// Admin: set the halving schedule for reward rate reduction.
-    /// `interval_ledgers` specifies how often rewards halve.
-    /// `floor_rate_bps` is the minimum rate enforced after halving.
+    /// `interval_ledgers` specifies how often the rate is reduced.
+    /// `reduction_bps` is the share of the current rate removed at each
+    /// interval (issue #701), between `1` and `10_000`; `5_000` is a classic
+    /// halving. `floor_rate_bps` is the minimum rate enforced after reductions.
     pub fn set_halving_schedule(
         env: Env,
         admin: Address,
         interval_ledgers: u32,
+        reduction_bps: u32,
         floor_rate_bps: i128,
     ) -> Result<(), VaultError> {
         admin::require_admin_as(&env, &admin)?;
         if interval_ledgers == 0 {
             return Err(VaultError::ZeroAmount);
+        }
+        if reduction_bps == 0 || reduction_bps > BOOST_BPS_BASE {
+            return Err(VaultError::InvalidRate);
         }
         if floor_rate_bps < 0 {
             return Err(VaultError::ZeroAmount);
@@ -3291,6 +3297,7 @@ impl VaultContract {
             floor_rate_bps,
         };
         balance::set_halving_config(&env, &config);
+        balance::set_halving_reduction_bps(&env, reduction_bps);
         Ok(())
     }
 
@@ -6409,7 +6416,11 @@ impl VaultContract {
         //
         // Issue #213: when a dynamic fee config is set, it replaces the static
         // fee from `set_unstake_fee_bps` entirely.
-        let unstake_fee_bps = if balance::get_dynamic_fee_config(env).is_some() {
+        //
+        // Issue #703: an active fee holiday waives the fee altogether.
+        let unstake_fee_bps = if crate::vault_extensions_701_704::settle_fee_holiday(env) {
+            0
+        } else if balance::get_dynamic_fee_config(env).is_some() {
             Self::compute_dynamic_fee_bps(env)
         } else {
             balance::get_unstake_fee_bps(env)
@@ -6434,9 +6445,14 @@ impl VaultContract {
         Self::check_activation(env);
 
         if unstake_fee > 0 {
+            // Issue #704: the insurance share comes off the top, before the
+            // revenue-share and treasury routing of the remainder.
+            let insurance_share =
+                crate::vault_extensions_701_704::take_insurance_share(env, unstake_fee)?;
+            let distributable_fee = unstake_fee - insurance_share;
             let rev_share_portion = if let Some(rev_cfg) = balance::get_revenue_sharing_config(env) {
                 if rev_cfg.share_bps > 0 {
-                    (unstake_fee * rev_cfg.share_bps as i128) / BOOST_BPS_BASE as i128
+                    (distributable_fee * rev_cfg.share_bps as i128) / BOOST_BPS_BASE as i128
                 } else {
                     0
                 }
@@ -6444,7 +6460,7 @@ impl VaultContract {
                 0
             };
 
-            let treasury_fee = unstake_fee - rev_share_portion;
+            let treasury_fee = distributable_fee - rev_share_portion;
             if rev_share_portion > 0 {
                 let rev_pool = balance::get_revenue_share_pool(env);
                 balance::set_revenue_share_pool(env, rev_pool + rev_share_portion);
@@ -8308,11 +8324,14 @@ impl VaultContract {
             ))
             .unwrap_or(0);
 
-        user_staked
+        let reward = user_staked
             .checked_mul(reward_factor)
             .unwrap_or(0)
             .checked_div(1_000_000_000_000i128)
-            .unwrap_or(0)
+            .unwrap_or(0);
+        // Issue #702: per-address cap on a single epoch's reward. The excess is
+        // never debited from the reward pool, so it stays in the pool.
+        crate::vault_extensions_701_704::apply_user_epoch_cap(&env, reward)
     }
 
     pub fn claim_epoch_rewards(env: Env, user: Address) -> Result<i128, VaultError> {
@@ -13169,7 +13188,9 @@ impl VaultContract {
         // a sunsetting user exits at full value. Everything below is already
         // gated on `fee > 0`, so a zero fee also skips the treasury/buyback
         // routing and the protocol-fee accounting.
-        let unstake_fee_bps = if balance::get_sunset_exit_deadline(env).is_some() {
+        let unstake_fee_bps = if balance::get_sunset_exit_deadline(env).is_some()
+            || crate::vault_extensions_701_704::settle_fee_holiday(env)
+        {
             0
         } else {
             crate::vault_extensions_538_541::get_effective_unstake_fee_bps(env, &token_addr)
@@ -13188,8 +13209,15 @@ impl VaultContract {
         balance::set_total_deposited(env, total_deposited - amount);
         if fee > 0 {
             balance::add_protocol_fee_collected(env, fee);
-            let treasury_share = crate::community_treasury::route_fee_revenue(env, fee)?;
-            let remaining_fee = fee
+            // Issue #704: the insurance share comes off the top of the fee.
+            let insurance_share =
+                crate::vault_extensions_701_704::take_insurance_share(env, fee)?;
+            let distributable_fee = fee
+                .checked_sub(insurance_share)
+                .ok_or(VaultError::ArithmeticError)?;
+            let treasury_share =
+                crate::community_treasury::route_fee_revenue(env, distributable_fee)?;
+            let remaining_fee = distributable_fee
                 .checked_sub(treasury_share)
                 .ok_or(VaultError::ArithmeticError)?;
             
@@ -14423,7 +14451,9 @@ pub fn get_reward_threshold(env: Env) -> i128 {
 
         // Issue #525: same fee waiver as `do_unstake` — `withdraw_to` is a
         // withdrawal too, so it stays open and free during a sunset.
-        let unstake_fee_bps = if balance::get_sunset_exit_deadline(&env).is_some() {
+        let unstake_fee_bps = if balance::get_sunset_exit_deadline(&env).is_some()
+            || crate::vault_extensions_701_704::settle_fee_holiday(&env)
+        {
             0
         } else {
             balance::get_unstake_fee_bps(&env)
@@ -14462,8 +14492,15 @@ pub fn get_reward_threshold(env: Env) -> i128 {
 
         if fee > 0 {
             balance::add_protocol_fee_collected(&env, fee);
-            let treasury_share = crate::community_treasury::route_fee_revenue(&env, fee)?;
-            let remaining_fee = fee
+            // Issue #704: the insurance share comes off the top of the fee.
+            let insurance_share =
+                crate::vault_extensions_701_704::take_insurance_share(&env, fee)?;
+            let distributable_fee = fee
+                .checked_sub(insurance_share)
+                .ok_or(VaultError::ArithmeticError)?;
+            let treasury_share =
+                crate::community_treasury::route_fee_revenue(&env, distributable_fee)?;
+            let remaining_fee = distributable_fee
                 .checked_sub(treasury_share)
                 .ok_or(VaultError::ArithmeticError)?;
             
@@ -14778,11 +14815,5 @@ pub mod batch_vote;
 pub mod daily_withdrawal_limit;
 #[path = "position_mirroring.rs"]
 pub mod position_mirroring;
-#[path = "share_allowance.rs"]
-pub mod share_allowance;
-#[path = "keeper_authorization.rs"]
-pub mod keeper_authorization;
-#[path = "multi_reward_tokens.rs"]
-pub mod multi_reward_tokens;
-#[path = "reward_epochs.rs"]
-pub mod reward_epochs;
+#[path = "vault_extensions_701_704.rs"]
+pub mod vault_extensions_701_704;
