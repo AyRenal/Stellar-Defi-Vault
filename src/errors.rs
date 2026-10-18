@@ -21,9 +21,9 @@ pub enum VaultError {
     /// Returned by staking, unstaking, and admin-yield entrypoints that require
     /// the pool to be unpaused.
     VaultPaused = 6,
-    /// Reserved for token-validation failures during initialization or future
-    /// token checks; no current public function returns this variant.
-    InvalidToken = 7,
+    /// Returned when a token address does not implement the expected SEP-41 token
+    /// interface during initialization or token validation fails (issue #598).
+    InvalidTokenInterface = 7,
     /// Returned by staking, unstaking, claim, slash, preview, and reward math
     /// helpers when checked arithmetic or share conversion fails.
     ArithmeticError = 8,
@@ -158,6 +158,11 @@ pub enum VaultError {
     PoolShuttingDown = 49,
     /// Returned by every admin-gated entrypoint after admin renouncement.
     NoAdmin = 50,
+}
+
+impl VaultError {
+    /// Backwards compatibility alias for `InvalidTokenInterface`.
+    pub const InvalidToken: VaultError = VaultError::InvalidTokenInterface;
 }
 
 /// Typed validation failures for public APIs that historically panicked.
