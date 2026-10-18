@@ -1159,6 +1159,9 @@ pub enum VaultSafetyError {
     /// Returned by `set_dust_keeper_tip_bps()` above the 1 000 bps cap
     /// (issue #708).
     InvalidTipBps = 17,
+    /// Returned by `close_dust_position()` while the position has escrowed
+    /// rewards pending release, which closing would forfeit (issue #708).
+    EscrowPending = 18,
 }
 
 impl From<VaultError> for VaultSafetyError {

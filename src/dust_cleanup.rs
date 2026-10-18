@@ -128,6 +128,7 @@ impl VaultContract {
     /// - `DustThresholdNotSet`: no threshold is configured.
     /// - `PositionNotFound`: `user` holds no position.
     /// - `PositionLocked`: the position is under a voluntary lock.
+    /// - `EscrowPending`: the position has escrowed rewards not yet claimed.
     /// - `NotDustPosition`: the position is at or above the threshold.
     /// - `ArithmeticError`: share conversion or fee overflow.
     ///
@@ -161,6 +162,11 @@ impl VaultContract {
         }
         if Self::get_lock_status(env.clone(), user.clone()).is_some() {
             return Err(VaultSafetyError::PositionLocked);
+        }
+        // Escrowed rewards are released by a later claim; closing the position
+        // would drop them, so wait until they have been claimed.
+        if balance::get_escrow_balance(&env, &user) > 0 {
+            return Err(VaultSafetyError::EscrowPending);
         }
 
         let total_shares = balance::get_total_shares(&env);
