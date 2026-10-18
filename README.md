@@ -335,13 +335,30 @@ See [docs/SECURITY.md](./docs/SECURITY.md) for the full security model, includin
 
 This contract is unaudited. Do not use in production without an independent security audit. If you find a vulnerability, please open a private [GitHub Security Advisory](../../security/advisories/new) rather than a public issue.
 
-## Known Limitations
+## Known Limitations & Remediations
 
-### Reward Rounding Dust Loss
+### Reward Rounding Dust Loss (Resolved in Issue #650)
 
-In fixed-point math, calculating reward using standard division leads to rounding loss where small stakes over short periods truncate to 0. Specifically:
+In fixed-point math, calculating reward using standard integer division previously led to rounding dust truncation where small stakes over short periods truncated to 0.
 
-- **Without Remainder Tracking**: The reward dust is permanently lost on every checkpoint update (e.g., on stake, unstake, slash, or claim), as the division remainder is discarded. These tokens remain in the contract's general `RewardPoolBalance` but are unallocated and unrecoverable for the users.
+#### Resolution: High-Precision Reward-Per-Share Accumulator
+Reward accrual now utilizes the standard accumulator pattern: a global `reward_per_share` index scaled by `ACCUMULATOR_SCALE = 1_000_000_000_000` (1e12), with each position storing a checkpoint:
+- **O(1) Accrual**: Updated on every stake, unstake, claim, and rate change without loop iteration.
+- **Dust Elimination**: Scaled index tracks sub-stroop accrual with 12 decimal places of sub-unit precision, preventing loss of fractional rewards.
+
+#### Scaling Constant & Overflow Headroom Analysis
+- **Scale Factor**: `10^12`
+- **Integer Storage**: Signed 128-bit integer (`i128::MAX` ≈ `1.7014 * 10^38`)
+- **Maximum Stellar Total Supply / TVL**: `10^11` XLM = `10^18` stroops
+- **Maximum Configurable APR**: `50,000` bps = 500% APR
+- **Accumulator Growth**: Over 100 continuous years at 500% APR, the scaled index increases by:
+  `100 * 5.0 * 10^12 = 5 * 10^14`
+- **Multiplication Headroom**:
+  When calculating a staker's pending reward, the intermediate product is:
+  `user_shares * delta_index <= 10^18 * (5 * 10^14) = 5 * 10^32`
+- **Headroom Margin**:
+  `i128::MAX / (5 * 10^32) ≈ 340,282` (> 340,000x safety headroom)
+  The accumulator is mathematically incapable of overflowing under any realistic protocol lifetime and parameters.
 
 ## License
 
