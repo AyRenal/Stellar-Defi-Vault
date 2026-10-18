@@ -20,7 +20,7 @@ the numeric value on the wire is the discriminant listed below.
 | 4 | `ZeroAmount` | Zero/negative amount where not allowed |
 | 5 | `InsufficientShares` | Burning more shares than owned |
 | 6 | `VaultPaused` | Pool is paused |
-| 7 | `InvalidToken` | Token validation failure (reserved) |
+| 7 | `InvalidTokenInterface` | Provided token does not implement SEP-41 token interface (decimals/balance/transfer) |
 | 8 | `ArithmeticError` | Checked arithmetic / share conversion failed |
 | 9 | `WithdrawalLimitExceeded` | Share amount over per-transaction limit |
 | 10 | `InvalidPenaltyBps` | Early-exit penalty above cap |

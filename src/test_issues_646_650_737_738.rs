@@ -154,7 +154,7 @@ fn test_constructor_initializes_state_and_blocks_post_deploy_init() {
     env.ledger().set_sequence_number(1_000);
 
     let admin = Address::generate(&env);
-    let token = Address::generate(&env);
+    let token = env.register_stellar_asset_contract(admin.clone());
     let reward_token = Address::generate(&env);
 
     // Deploy contract using register_contract

@@ -268,10 +268,20 @@ impl VaultContract {
             balance::set_reward_rate_bps(env, reward_rate_bps);
         }
 
-        // Query the actual underlying precision. Seven decimals is only the
-        // fixed internal precision used by shares, not an assumption about the
-        // token's base units.
-        let queried_stake_decimals = token::Client::new(env, &token).decimals();
+        // Issue #598: Verify at initialize time that the provided deposit token implements
+        // the expected SEP-41 (Stellar's fungible token standard) interface.
+        // Performs a lightweight call (`try_decimals()`) to ensure the contract exists and conforms
+        // to SEP-41, failing fast with `InvalidTokenInterface` if incompatible.
+        // Minimum SEP-41 interface functions required:
+        // - `decimals(&self) -> u32`
+        // - `balance(&self, id: Address) -> i128`
+        // - `transfer(&self, from: Address, to: Address, amount: i128)`
+        // - `transfer_from(&self, spender: Address, from: Address, to: Address, amount: i128)`
+        let token_client = token::Client::new(env, &token);
+        let queried_stake_decimals = match token_client.try_decimals() {
+            Ok(Ok(decimals)) => decimals,
+            _ => return Err(VaultError::InvalidTokenInterface),
+        };
         balance::set_stake_decimals(env, queried_stake_decimals);
         balance::set_reward_decimals(
             env,
@@ -281,6 +291,11 @@ impl VaultContract {
         let actual_reward_token = if let Some(ref rt) = reward_token {
             if rt == &self_addr {
                 return Err(VaultError::InvalidAddress);
+            }
+            // Also verify reward token implements SEP-41 interface
+            let reward_client = token::Client::new(env, rt);
+            if reward_client.try_decimals().map_or(true, |res| res.is_err()) {
+                return Err(VaultError::InvalidTokenInterface);
             }
             balance::set_reward_token(env, rt);
             rt.clone()
