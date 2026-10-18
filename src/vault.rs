@@ -6260,8 +6260,41 @@ impl VaultContract {
         Ok(shares)
     }
 
+    /// Claim for `user` without their signature, for callers that have
+    /// already checked their own authorization (issue #698). Rewards are paid
+    /// by `do_claim` to `user`, never to the caller. Applies the same guard,
+    /// rate limit and large-claim queue as `claim`, so delegating a claim
+    /// cannot bypass them.
+    pub(crate) fn claim_for_user(env: &Env, user: &Address) -> Result<i128, VaultError> {
+        let _guard = ReentrancyGuard::new(env)?;
+        Self::check_claim_rate_limit(env, user);
+        if crate::mev_claim_protection::maybe_queue_large_claim(env, user)? {
+            balance::set_last_claim_action_ledger(env, user, env.ledger().sequence());
+            return Ok(0);
+        }
+        let result = Self::do_claim(env, user);
+        if result.is_ok() {
+            balance::set_last_claim_action_ledger(env, user, env.ledger().sequence());
+        }
+        result
+    }
+
     fn do_unstake(env: &Env, staker: &Address, shares: i128) -> Result<i128, VaultError> {
         staker.require_auth();
+        Self::do_unstake_to(env, staker, shares, staker)
+    }
+
+    /// Unstake logic shared by `do_unstake` and `withdraw_from` (issue #697).
+    ///
+    /// Burns `staker`'s `shares` and pays the proceeds to `recipient`. It does
+    /// not authenticate `staker`: callers must have authorized the call
+    /// themselves (the owner, or a spender holding a withdrawal allowance).
+    pub(crate) fn do_unstake_to(
+        env: &Env,
+        staker: &Address,
+        shares: i128,
+        recipient: &Address,
+    ) -> Result<i128, VaultError> {
         Self::maybe_emit_position_expired(env, staker);
 
         // Reject unstake if user has an outstanding debt NFT.
@@ -6474,7 +6507,7 @@ impl VaultContract {
         Self::append_stake_history(env, staker, StakeAction::Unstake, amount_returned);
 
         let token_client = token::Client::new(env, &token_addr);
-        token_client.transfer(&env.current_contract_address(), staker, &amount_returned);
+        token_client.transfer(&env.current_contract_address(), recipient, &amount_returned);
 
         events::withdraw(
             env,
@@ -6626,6 +6659,8 @@ impl VaultContract {
             current_ledger,
             true,
         )?;
+        // Issue #700: clamp to the current epoch's remaining emission budget.
+        let additional_reward = crate::vault::reward_epochs::apply_budget(env, additional_reward);
 
         if additional_reward > 0 {
             let accrued = balance::get_accrued_reward(env, user);
