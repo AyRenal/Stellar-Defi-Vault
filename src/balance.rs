@@ -1720,14 +1720,47 @@ pub fn next_halving_at(env: &Env) -> Option<u32> {
     })
 }
 
-/// Compute the effective rate with halving applied: `base_rate / (2 ^ halving_count)`,
-/// floored at `floor_rate_bps`. If no halving config exists, returns base_rate.
+/// Default per-interval reduction (50%) used when a halving schedule has no
+/// explicit `reduction_bps` stored, i.e. a schedule written before issue #701.
+pub const DEFAULT_HALVING_REDUCTION_BPS: u32 = 5_000;
+
+/// Issue #701: per-interval reduction of the halving schedule, in bps.
+pub fn get_halving_reduction_bps(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&symbol_short!("halv_red"))
+        .unwrap_or(DEFAULT_HALVING_REDUCTION_BPS)
+}
+
+pub fn set_halving_reduction_bps(env: &Env, reduction_bps: u32) {
+    env.storage()
+        .instance()
+        .set(&symbol_short!("halv_red"), &reduction_bps);
+}
+
+/// Issue #701: remove the halving schedule so the static rate applies again.
+pub fn clear_halving_config(env: &Env) {
+    env.storage().instance().remove(&symbol_short!("halvcfg"));
+    env.storage().instance().remove(&symbol_short!("halv_red"));
+}
+
+/// Compute the effective rate with the reduction schedule applied: the base
+/// rate is cut by `reduction_bps` once per elapsed interval (a 5_000 bps cut
+/// is the classic halving, `base_rate / 2^halving_count`), never going below
+/// `floor_rate_bps`. If no halving config exists, returns base_rate.
 pub fn halving_adjusted_rate(env: &Env, base_rate_bps: u32, ledger: u32) -> i128 {
     match get_halving_config(env) {
         Some(config) => {
             let count = halving_count_at(env, ledger);
-            let divisor = 1i128 << count; // 2^count
-            let effective = (base_rate_bps as i128) / divisor;
+            let keep_bps = 10_000i128 - get_halving_reduction_bps(env) as i128;
+            let mut effective = base_rate_bps as i128;
+            let mut applied = 0u32;
+            // Stops as soon as the floor is reached, so the loop is bounded by
+            // the rate itself rather than by the number of elapsed intervals.
+            while applied < count && effective > config.floor_rate_bps {
+                effective = effective * keep_bps / 10_000;
+                applied += 1;
+            }
             effective.max(config.floor_rate_bps)
         }
         None => base_rate_bps as i128,

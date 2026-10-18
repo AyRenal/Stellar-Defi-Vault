@@ -96,6 +96,10 @@ pub fn clear_token_fee_override_storage(env: &Env, token: &Address) {
 /// Effective unstake fee for `token`: returns the token-specific override if set,
 /// otherwise falls back to the pool-wide default.
 pub fn get_effective_unstake_fee_bps(env: &Env, token: &Address) -> u32 {
+    // Issue #703: no fee is charged during a fee holiday.
+    if crate::vault_extensions_701_704::is_fee_holiday_active(env) {
+        return 0;
+    }
     if let Some(override_entry) = get_token_fee_override_storage(env, token) {
         if let Some(bps) = override_entry.unstake_fee_bps {
             return bps;
@@ -107,6 +111,10 @@ pub fn get_effective_unstake_fee_bps(env: &Env, token: &Address) -> u32 {
 /// Effective deposit fee for `token`: returns the token-specific override if set,
 /// otherwise returns 0 (the global default deposit fee).
 pub fn get_effective_deposit_fee_bps(env: &Env, token: &Address) -> u32 {
+    // Issue #703: no fee is charged during a fee holiday.
+    if crate::vault_extensions_701_704::is_fee_holiday_active(env) {
+        return 0;
+    }
     if let Some(override_entry) = get_token_fee_override_storage(env, token) {
         if let Some(bps) = override_entry.deposit_fee_bps {
             return bps;

@@ -90,6 +90,9 @@ mod test_features_287_290;
 #[cfg(test)]
 mod test_issues_463_466;
 
+#[cfg(test)]
+mod test_issues_701_704;
+
 // Issue #658: this module was missing its `#[cfg(test)]` gate, so its test
 // helpers (and their `testutils` dependencies) were compiled into the release
 // WASM. Every test module must stay behind `#[cfg(test)]`.

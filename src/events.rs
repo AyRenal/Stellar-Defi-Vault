@@ -1577,3 +1577,30 @@ pub fn apy_snapshot_recorded(env: &Env, apy_bps: u32, ledger: u32) {
     env.events().publish(topics, (apy_bps, ledger));
 }
 
+// ── Issues #701-#704: fee holiday and insurance reserve ──────────────────────
+
+/// Emitted when the admin starts a fee holiday (issue #703).
+pub fn fee_holiday_started(env: &Env, ends_at_ledger: u32, ledger: u32) {
+    let topics = (Symbol::new(env, "fee_holiday_started"),);
+    env.events().publish(topics, (ends_at_ledger, ledger));
+}
+
+/// Emitted when a fee holiday ends, either through `end_fee_holiday` or lazily
+/// the first time a fee calculation sees that it has expired (issue #703).
+pub fn fee_holiday_ended(env: &Env, ends_at_ledger: u32, ledger: u32) {
+    let topics = (Symbol::new(env, "fee_holiday_ended"),);
+    env.events().publish(topics, (ends_at_ledger, ledger));
+}
+
+/// Emitted when the admin releases funds from the insurance reserve (issue #704).
+pub fn insurance_reserve_used(
+    env: &Env,
+    admin: &Address,
+    amount: i128,
+    reason_hash: &soroban_sdk::BytesN<32>,
+    ledger: u32,
+) {
+    let topics = (Symbol::new(env, "insurance_reserve_used"), admin);
+    env.events()
+        .publish(topics, (amount, reason_hash.clone(), ledger));
+}

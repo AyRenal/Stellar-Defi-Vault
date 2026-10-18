@@ -1483,7 +1483,7 @@ fn test_reward_halving_schedule_integration() {
     assert_eq!(vault.next_halving_at(), None);
 
     // 2. Set halving schedule: interval = 100 ledgers, floor_rate_bps = 200
-    vault.set_halving_schedule(&admin, &100, &200);
+    vault.set_halving_schedule(&admin, &100, &5_000, &200);
 
     let config = vault.get_halving_config().unwrap();
     assert_eq!(config.interval_ledgers, 100);
