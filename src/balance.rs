@@ -34,6 +34,9 @@ pub fn get_shares(env: &Env, user: &Address) -> i128 {
 
 pub fn set_shares(env: &Env, user: &Address, amount: i128) {
     assert_non_negative(env, amount);
+    // Issue #699: extra reward tokens accrue per share, so settle them at the
+    // old share count before it changes.
+    crate::vault::multi_reward_tokens::settle_user(env, user);
     env.storage()
         .persistent()
         .set(&DataKey::ShareBalance(user.clone()), &amount);
