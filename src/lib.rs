@@ -63,6 +63,9 @@ pub use nft::StakeReceiptNFT;
 pub use vault::VaultContract;
 
 #[cfg(test)]
+mod test_issues_757_760;
+
+#[cfg(test)]
 mod test;
 
 #[cfg(test)]

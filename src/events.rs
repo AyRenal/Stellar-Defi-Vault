@@ -21,6 +21,68 @@ pub fn referral_bonus_paid(
     );
 }
 
+pub fn referral_earnings_claimed(
+    env: &Env,
+    referrer: &Address,
+    amount: i128,
+    ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("ref_clm"), referrer.clone()),
+        (amount, ledger),
+    );
+}
+
+pub fn ve_boost_locked(
+    env: &Env,
+    user: &Address,
+    amount: i128,
+    duration_ledgers: u32,
+    unlock_ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("ve_lck"), user.clone()),
+        (amount, duration_ledgers, unlock_ledger),
+    );
+}
+
+pub fn ve_boost_unlocked(
+    env: &Env,
+    user: &Address,
+    amount: i128,
+    ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("ve_unl"), user.clone()),
+        (amount, ledger),
+    );
+}
+
+pub fn gauge_voted(
+    env: &Env,
+    user: &Address,
+    ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("g_voted"), user.clone()),
+        ledger,
+    );
+}
+
+pub fn proposal_vote_changed(
+    env: &Env,
+    user: &Address,
+    proposal_id: u32,
+    support: bool,
+    weight: i128,
+    ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("v_chg"), user.clone(), proposal_id),
+        (support, weight, ledger),
+    );
+}
+
 pub fn withdraw(
     env: &Env,
     withdrawer: &Address,
