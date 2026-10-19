@@ -225,15 +225,16 @@ impl VaultContract {
     ///
     /// # Events
     /// - `pool_initialized` (`events::pool_initialized`).
-    pub fn initialize(
-        env: Env,
+    fn do_initialize(
+        env: &Env,
         admin: Address,
         token: Address,
+        reward_token: Option<Address>,
         reward_rate_bps: u32,
         _stake_decimals: Option<u32>,
         reward_decimals: Option<u32>,
     ) -> Result<(), VaultError> {
-        if env.storage().instance().has(&DataKey::Admin) || admin::is_renounced(&env) {
+        if env.storage().instance().has(&DataKey::Admin) || admin::is_renounced(env) {
             return Err(VaultError::AlreadyInitialized);
         }
         admin.require_auth();
@@ -250,7 +251,7 @@ impl VaultContract {
         // Issue #72: validate reward rate.
         Self::validate_rate_bps(reward_rate_bps)?;
 
-        admin::set_admin(&env, &admin);
+        admin::set_admin(env, &admin);
         env.storage().instance().set(&DataKey::Token, &token);
         env.storage().instance().set(&DataKey::Paused, &false);
         // Store the original deployer address (write-once, never changes).
@@ -259,26 +260,96 @@ impl VaultContract {
             .instance()
             .set(&symbol_short!("deployer"), &admin);
         // By default, set the slash treasury to the admin address. Can be updated by admin later.
-        balance::set_slash_treasury(&env, &admin);
+        balance::set_slash_treasury(env, &admin);
         // Issue #117: record initialization ledger for pool_uptime_ledgers.
-        balance::set_initialized_at_ledger(&env, env.ledger().sequence());
+        balance::set_initialized_at_ledger(env, env.ledger().sequence());
 
         if reward_rate_bps > 0 {
-            balance::set_reward_rate_bps(&env, reward_rate_bps);
+            balance::set_reward_rate_bps(env, reward_rate_bps);
         }
 
-        // Query the actual underlying precision. Seven decimals is only the
-        // fixed internal precision used by shares, not an assumption about the
-        // token's base units.
-        let queried_stake_decimals = token::Client::new(&env, &token).decimals();
-        balance::set_stake_decimals(&env, queried_stake_decimals);
+        // Issue #598: Verify at initialize time that the provided deposit token implements
+        // the expected SEP-41 (Stellar's fungible token standard) interface.
+        // Performs a lightweight call (`try_decimals()`) to ensure the contract exists and conforms
+        // to SEP-41, failing fast with `InvalidTokenInterface` if incompatible.
+        // Minimum SEP-41 interface functions required:
+        // - `decimals(&self) -> u32`
+        // - `balance(&self, id: Address) -> i128`
+        // - `transfer(&self, from: Address, to: Address, amount: i128)`
+        // - `transfer_from(&self, spender: Address, from: Address, to: Address, amount: i128)`
+        let token_client = token::Client::new(env, &token);
+        let queried_stake_decimals = match token_client.try_decimals() {
+            Ok(Ok(decimals)) => decimals,
+            _ => return Err(VaultError::InvalidTokenInterface),
+        };
+        balance::set_stake_decimals(env, queried_stake_decimals);
         balance::set_reward_decimals(
-            &env,
+            env,
             reward_decimals.unwrap_or(balance::DEFAULT_TOKEN_DECIMALS),
         );
 
-        events::pool_initialized(&env, &admin, &token, &token, reward_rate_bps);
+        let actual_reward_token = if let Some(ref rt) = reward_token {
+            if rt == &self_addr {
+                return Err(VaultError::InvalidAddress);
+            }
+            // Also verify reward token implements SEP-41 interface
+            let reward_client = token::Client::new(env, rt);
+            if reward_client.try_decimals().map_or(true, |res| res.is_err()) {
+                return Err(VaultError::InvalidTokenInterface);
+            }
+            balance::set_reward_token(env, rt);
+            rt.clone()
+        } else {
+            token.clone()
+        };
+
+        crate::reward_accumulator::init_accumulator(env);
+
+        events::pool_initialized(env, &admin, &token, &actual_reward_token, reward_rate_bps);
         Ok(())
+    }
+
+    /// Soroban constructor to initialize vault state atomically at deployment (Issue #737).
+    /// Prevents front-running of post-deploy initialization.
+    pub fn __constructor(
+        env: Env,
+        admin: Address,
+        token: Address,
+        reward_token: Option<Address>,
+        reward_rate_bps: Option<u32>,
+        stake_decimals: Option<u32>,
+        reward_decimals: Option<u32>,
+    ) -> Result<(), VaultError> {
+        Self::do_initialize(
+            &env,
+            admin,
+            token,
+            reward_token,
+            reward_rate_bps.unwrap_or(0),
+            stake_decimals,
+            reward_decimals,
+        )
+    }
+
+    /// Initializes the vault if not already initialized at deploy time (Issue #737).
+    /// Calling this on an already-deployed and initialized instance returns AlreadyInitialized error.
+    pub fn initialize(
+        env: Env,
+        admin: Address,
+        token: Address,
+        reward_rate_bps: u32,
+        _stake_decimals: Option<u32>,
+        reward_decimals: Option<u32>,
+    ) -> Result<(), VaultError> {
+        Self::do_initialize(
+            &env,
+            admin,
+            token,
+            None,
+            reward_rate_bps,
+            _stake_decimals,
+            reward_decimals,
+        )
     }
 
     /// Admin: serialize the full pool state for migrating to a new contract
@@ -504,10 +575,28 @@ impl VaultContract {
         admin::require_admin(&env)?;
         Self::validate_rate_bps(rate_bps)?;
         crate::vault_extensions_538_541::clear_rate_ramp(&env);
+        // Issue #650: Settle rewards under current rate before changing rate
+        crate::reward_accumulator::update_global_accumulator(&env)?;
         let old_rate = balance::get_reward_rate_bps(&env);
         balance::set_reward_rate_bps(&env, rate_bps);
         balance::record_rate_change(&env, old_rate, rate_bps);
         Ok(())
+    }
+
+    /// Read-only: Returns the global reward-per-share accumulator index scaled by 1e12 (Issue #650).
+    pub fn get_global_reward_per_share(env: Env) -> i128 {
+        crate::reward_accumulator::get_global_reward_per_share(&env)
+    }
+
+    /// Read-only: Returns a user's checkpointed accumulator index (Issue #650).
+    pub fn get_user_reward_checkpoint(env: Env, user: Address) -> i128 {
+        crate::reward_accumulator::get_user_checkpoint(&env, &user)
+    }
+
+    /// Read-only: Computes pending reward via the reward-per-share accumulator (Issue #650).
+    pub fn get_accumulated_reward(env: Env, user: Address) -> Result<i128, VaultError> {
+        let shares = balance::get_shares(&env, &user);
+        crate::reward_accumulator::compute_accumulated_reward(&env, &user, shares)
     }
 
     /// Read-only reward rate APR in basis points (interpolated if a rate ramp is active).
@@ -2366,24 +2455,78 @@ impl VaultContract {
         Ok(())
     }
 
-    /// Transfer the admin role to a new address (admin only).
+    /// Propose a new admin address as the first step of a two-step transfer (Issue #738).
     ///
     /// # Authorization
-    /// The current (stored) admin must sign.
+    /// The current (stored) admin must sign and match `admin`.
+    pub fn propose_admin(env: Env, admin: Address, new_admin: Address) -> Result<(), VaultError> {
+        admin::require_admin_as(&env, &admin)?;
+        if new_admin == env.current_contract_address() {
+            return Err(VaultError::InvalidAddress);
+        }
+        if new_admin == admin {
+            return Err(VaultError::InvalidAddress);
+        }
+        admin::set_pending_admin(&env, &new_admin);
+        events::admin_proposal_created(&env, &admin, &new_admin);
+        Ok(())
+    }
+
+    /// Accept the proposed admin role and complete the transfer (Issue #738).
     ///
-    /// # Errors
-    /// - `NotInitialized`: no admin is stored.
-    /// - `InvalidAddress`: `new_admin` is this contract's own address.
+    /// # Authorization
+    /// `new_admin` must sign.
+    pub fn accept_admin(env: Env, new_admin: Address) -> Result<(), VaultError> {
+        let pending = admin::get_pending_admin(&env).ok_or(VaultError::Unauthorized)?;
+        if new_admin != pending {
+            return Err(VaultError::Unauthorized);
+        }
+        new_admin.require_auth();
+        let old_admin = admin::get_admin(&env)?;
+        admin::clear_pending_admin(&env);
+        admin::set_admin(&env, &new_admin);
+        events::admin_changed(&env, &old_admin, &new_admin);
+        events::admin_action_transfer_admin(&env, &old_admin, &new_admin);
+        events::admin_proposal_accepted(&env, &old_admin, &new_admin);
+        balance::increment_admin_action_count(&env);
+        Self::append_changelog(
+            &env,
+            &old_admin,
+            String::from_str(&env, "admin_transferred"),
+            0,
+            0,
+        );
+        Ok(())
+    }
+
+    /// Cancel a pending admin proposal (Issue #738).
     ///
-    /// # Events
-    /// - `admin_changed` (`events::admin_changed`).
-    /// - `admin_action_transfer_admin` (`events::admin_action_transfer_admin`).
+    /// # Authorization
+    /// The current admin must sign and match `admin`.
+    pub fn cancel_admin_proposal(env: Env, admin: Address) -> Result<(), VaultError> {
+        admin::require_admin_as(&env, &admin)?;
+        let pending = admin::get_pending_admin(&env).ok_or(VaultError::Unauthorized)?;
+        admin::clear_pending_admin(&env);
+        events::admin_proposal_cancelled(&env, &admin, &pending);
+        Ok(())
+    }
+
+    /// Read-only: Returns the currently proposed pending admin, if any (Issue #738).
+    pub fn get_pending_admin(env: Env) -> Option<Address> {
+        admin::get_pending_admin(&env)
+    }
+
+    /// Transfer the admin role to a new address (admin only).
+    ///
+    /// Deprecated in favor of the two-step `propose_admin()` and `accept_admin()` flow (Issue #738).
+    #[deprecated(note = "use propose_admin and accept_admin instead")]
     pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), VaultError> {
         admin::require_admin(&env)?;
         if new_admin == env.current_contract_address() {
             return Err(VaultError::InvalidAddress);
         }
         let old_admin = admin::get_admin(&env)?;
+        admin::clear_pending_admin(&env);
         admin::set_admin(&env, &new_admin);
         events::admin_changed(&env, &old_admin, &new_admin);
         events::admin_action_transfer_admin(&env, &old_admin, &new_admin);
@@ -3014,9 +3157,6 @@ impl VaultContract {
         referee: &Address,
         deposit_amount: i128,
     ) -> Result<(), VaultError> {
-        admin::require_admin_as(&env, &admin)?;
-        if base_fee_bps > max_fee_bps || utilization_threshold_bps > BOOST_BPS_BASE {
-            return Err(VaultError::InvalidRate);
         if referrer == referee {
             return Err(VaultError::InvalidAddress);
         }
@@ -3051,32 +3191,12 @@ impl VaultContract {
             return Err(VaultError::InsufficientRewardPool);
         }
 
-    /// Admin: set the per-user reward claim cap and rolling window size.
-    ///
-    /// `max_amount` is the maximum cumulative reward any single user may claim
-    /// within a window of `window_ledgers` ledgers. Pass `0` for `max_amount`
-    /// to disable the cap entirely. The window resets automatically once
-    /// `current_ledger > window_started_at + window_ledgers`.
-    ///
-    /// Unclaimed remainder accrues into the next window — it is never lost.
-    pub fn set_claim_cap(
-        env: Env,
-        admin: Address,
-        max_amount: i128,
-        window_ledgers: u32,
-    ) -> Result<(), VaultError> {
-        admin::require_admin_as(&env, &admin)?;
-        if max_amount < 0 {
-            return Err(VaultError::ZeroAmount);
         if total_bonus > 0 {
             let reward_token = Self::reward_token_address(env)?;
             let client = token::Client::new(env, &reward_token);
             let pool_address = env.current_contract_address();
             if client.balance(&pool_address) < total_bonus {
                 return Err(VaultError::InsufficientRewardPool);
-            }
-            if referrer_bonus > 0 {
-                client.transfer(&pool_address, referrer, &referrer_bonus);
             }
             if referee_bonus > 0 {
                 client.transfer(&pool_address, referee, &referee_bonus);
@@ -3087,11 +3207,15 @@ impl VaultContract {
         balance::set_referrer_of(env, referee, referrer);
         balance::add_referee(env, referrer, referee);
         let mut stats = balance::get_referral_stats(env, referrer);
-        stats.total_referred_stake = stats
-            .total_referred_stake
+        stats.total_referred_deposits = stats
+            .total_referred_deposits
             .checked_add(deposit_amount)
             .ok_or(VaultError::ArithmeticError)?;
-        stats.referral_count = stats.referral_count.saturating_add(1);
+        stats.referee_count = stats.referee_count.saturating_add(1);
+        stats.earned = stats
+            .earned
+            .checked_add(referrer_bonus)
+            .ok_or(VaultError::ArithmeticError)?;
         balance::set_referral_stats(env, referrer, &stats);
         events::referral_bonus_paid(
             env,
@@ -3905,8 +4029,8 @@ impl VaultContract {
             address: address.clone(),
             parent: parent.clone(),
             level,
-            referred_count: stats.referral_count,
-            total_referred_stake: stats.total_referred_stake,
+            referred_count: stats.referee_count,
+            total_referred_stake: stats.total_referred_deposits,
         }
     }
 
@@ -6389,7 +6513,7 @@ impl VaultContract {
         // gross unstaked amount so the leaderboard stays accurate.
         if let Some(referrer) = balance::get_referrer_of(env, staker) {
             let mut stats = balance::get_referral_stats(env, &referrer);
-            stats.total_referred_stake = stats.total_referred_stake.saturating_sub(amount);
+            stats.total_referred_deposits = stats.total_referred_deposits.saturating_sub(amount);
             balance::set_referral_stats(env, &referrer, &stats);
         }
 
@@ -6705,6 +6829,10 @@ impl VaultContract {
         }
 
         balance::set_reward_checkpoint_ledger(env, user, current_ledger);
+
+        // Issue #650: Update global reward accumulator and user checkpoint
+        let _ = crate::reward_accumulator::update_global_accumulator(env);
+        crate::reward_accumulator::checkpoint_user(env, user);
 
         // Issue #202: settle bootstrap -> base_rate *after* this call's own
         // reward math ran, so a claim/stake that crosses the bootstrap
@@ -8968,9 +9096,9 @@ impl VaultContract {
 
         let mut stats = balance::get_referral_stats(&env, &effective_referrer);
         if is_new_referral {
-            stats.referral_count += 1;
+            stats.referee_count += 1;
         }
-        stats.total_referred_stake = stats.total_referred_stake.saturating_add(amount);
+        stats.total_referred_deposits = stats.total_referred_deposits.saturating_add(amount);
         balance::set_referral_stats(&env, &effective_referrer, &stats);
 
         Ok(shares)
@@ -8991,7 +9119,7 @@ impl VaultContract {
         while i < registry.len() {
             let referrer = registry.get(i).unwrap();
             let stats = balance::get_referral_stats(&env, &referrer);
-            let stake = stats.total_referred_stake;
+            let stake = stats.total_referred_deposits;
 
             // Find insertion index in the descending-sorted top list.
             let mut ins = top.len(); // default: append at end
@@ -9009,7 +9137,7 @@ impl VaultContract {
                 let entry = ReferralLeaderboardEntry {
                     referrer,
                     total_referred_stake: stake,
-                    referral_count: stats.referral_count,
+                    referral_count: stats.referee_count,
                 };
                 // Rebuild the sorted vec with the new entry at `ins`.
                 let mut new_top: Vec<ReferralLeaderboardEntry> = Vec::new(&env);
@@ -9372,6 +9500,12 @@ impl VaultContract {
         }
         balance::set_proposal(&env, proposal_id, &proposal);
         balance::set_voted(&env, proposal_id, &user);
+        let receipt = crate::storage::VoteReceipt {
+            support,
+            weight,
+            ledger: env.ledger().sequence(),
+        };
+        balance::set_vote_receipt(&env, proposal_id, &user, &receipt);
         events::proposal_voted(
             &env,
             &user,

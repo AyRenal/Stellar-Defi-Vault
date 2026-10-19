@@ -289,3 +289,30 @@ As pool size grows, full-registry and multi-user iteration pathways incur quadra
 
 3. **Pagination & Range Limits**:
    - All multi-user view functions must require `start_after: Option<Address>` or `offset: u32` along with `limit: u32` clamped to at most 50 entries.
+
+## Ledger Entry Size Audit for Rolling-Buffer `Vec` Storage (Issue #649)
+
+### Executive Summary
+Soroban enforces a maximum ledger entry size of 64KB (65,536 bytes). Rolling-buffer storage vectors (histories, logs, snapshots, queues) risk hitting this ceiling at full capacity if unbounded or inadequately sized. This audit cataloged every `Vec`-backed storage key, measured element sizes and capacity ceilings, and empirically verified that writes and reads succeed safely at capacity.
+
+### Rolling-Buffer Vector Ledger Entry Size Matrix
+
+| Storage Key | Storage Scope | Element Type | Approx Element Size | Max Length / Cap | Max Entry Size (XDR) | Limit Safety Margin | Status / Mitigation |
+|---|---|---|---|---|---|---|---|
+| `act_log` | Instance | `DayBucket` (4 `u32`s) | 16 bytes | 7 days | ~140 bytes | > 99.7% | Bounded rolling window |
+| `RateHistory` | Instance | `(u32, u32, u32)` | 12 bytes | 50 entries (`MAX_RATE_HISTORY_ENTRIES`) | ~680 bytes | > 98.9% | FIFO pruned upon append |
+| `rr_hist` | Instance | `RateHistoryEntry` | 16 bytes | 20 entries (`MAX_RICH_RATE_HISTORY`) | ~360 bytes | > 99.4% | FIFO pruned upon append |
+| `Changelog` | Instance | `ChangelogEntry` | ~68 bytes | 10 entries (`MAX_CHANGELOG_ENTRIES`) | ~720 bytes | > 98.8% | FIFO pruned upon record |
+| `StakeHistory(Address)` | Persistent | `(u32, i128)` | 20 bytes | 5 entries (`MAX_STAKE_HISTORY`) | ~120 bytes | > 99.8% | Bounded per user |
+| `clm_hist` | Persistent | `(u32, i128)` | 20 bytes | 100 entries (`MAX_CLAIM_HISTORY`) | ~2,200 bytes | > 96.6% | FIFO pruned upon record |
+| `BoostSchedule` | Instance | `(u32, u32)` | 8 bytes | 5 tiers (`MAX_BOOST_TIERS`) | ~60 bytes | > 99.9% | Validated on set |
+| `VestingEntries(Address)` | Persistent | `VestingEntry` | 20 bytes | 10 entries (`VestingQueueFull`) | ~240 bytes | > 99.6% | Reverts when queue full |
+| `acc_tier` | Instance | `AccessTier` | 20 bytes | 10 tiers | ~250 bytes | > 99.6% | Bounded admin tiers |
+| `anniv_pd` | Persistent | `u32` | 4 bytes | 20 years | ~100 bytes | > 99.8% | Naturally bounded |
+| `u_rcpt` | Persistent | `u64` | 8 bytes | 50 receipts | ~450 bytes | > 99.3% | Bounded per user |
+
+### Findings & Mitigations
+- All rolling buffer collections have explicit capacity bounds (`MAX_*`) and FIFO pruning mechanisms on append.
+- The largest rolling buffer entry (`clm_hist` at 100 entries) consumes ~2.2 KB in XDR format, providing a safety margin of over 96.6% below Soroban's 64 KB ledger entry limit.
+- Verified via `src/test_vec_storage_capacity.rs`: filling every rolling buffer to its maximum capacity succeeds without error.
+- No rolling buffer key risks exceeding ledger entry capacity.

@@ -21,6 +21,68 @@ pub fn referral_bonus_paid(
     );
 }
 
+pub fn referral_earnings_claimed(
+    env: &Env,
+    referrer: &Address,
+    amount: i128,
+    ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("ref_clm"), referrer.clone()),
+        (amount, ledger),
+    );
+}
+
+pub fn ve_boost_locked(
+    env: &Env,
+    user: &Address,
+    amount: i128,
+    duration_ledgers: u32,
+    unlock_ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("ve_lck"), user.clone()),
+        (amount, duration_ledgers, unlock_ledger),
+    );
+}
+
+pub fn ve_boost_unlocked(
+    env: &Env,
+    user: &Address,
+    amount: i128,
+    ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("ve_unl"), user.clone()),
+        (amount, ledger),
+    );
+}
+
+pub fn gauge_voted(
+    env: &Env,
+    user: &Address,
+    ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("g_voted"), user.clone()),
+        ledger,
+    );
+}
+
+pub fn proposal_vote_changed(
+    env: &Env,
+    user: &Address,
+    proposal_id: u32,
+    support: bool,
+    weight: i128,
+    ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("v_chg"), user.clone(), proposal_id),
+        (support, weight, ledger),
+    );
+}
+
 pub fn withdraw(
     env: &Env,
     withdrawer: &Address,
@@ -1604,3 +1666,151 @@ pub fn insurance_reserve_used(
     env.events()
         .publish(topics, (amount, reason_hash.clone(), ledger));
 }
+
+/// Emitted when an admin proposes a new administrator address (Issue #738).
+pub fn admin_proposal_created(env: &Env, admin: &Address, new_admin: &Address) {
+    env.events().publish(
+        (symbol_short!("adm_prop"), admin.clone()),
+        (new_admin.clone(), env.ledger().sequence()),
+    );
+}
+
+/// Emitted when a proposed admin accepts and completes the transfer (Issue #738).
+pub fn admin_proposal_accepted(env: &Env, old_admin: &Address, new_admin: &Address) {
+    env.events().publish(
+        (symbol_short!("adm_acpt"), old_admin.clone()),
+        (new_admin.clone(), env.ledger().sequence()),
+    );
+}
+
+/// Emitted when an admin cancels an active admin transfer proposal (Issue #738).
+pub fn admin_proposal_cancelled(env: &Env, admin: &Address, cancelled_admin: &Address) {
+    env.events().publish(
+        (symbol_short!("adm_canc"), admin.clone()),
+        (cancelled_admin.clone(), env.ledger().sequence()),
+    );
+}
+
+/// Emitted when the global reward accumulator index updates (Issue #650).
+pub fn reward_accumulator_updated(env: &Env, global_index: i128, ledger: u32) {
+    env.events().publish(
+        (symbol_short!("rw_acc"),),
+        (global_index, ledger),
+    );
+}
+
+/// Emitted when parameters for a proposal category are updated (issue #761).
+pub fn category_params_set(
+    env: &Env,
+    admin: &Address,
+    category: u32,
+    quorum_bps: u32,
+    threshold_bps: u32,
+    period_ledgers: u32,
+    ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("cat_prm"), admin.clone()),
+        (category, quorum_bps, threshold_bps, period_ledgers, ledger),
+    );
+}
+
+/// Emitted when an expedited emergency proposal is created (issue #762).
+pub fn expedited_proposal_created(
+    env: &Env,
+    proposer: &Address,
+    proposal_id: u32,
+    bond: i128,
+    ends_at: u32,
+    ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("exp_prop"), proposer.clone()),
+        (proposal_id, bond, ends_at, ledger),
+    );
+}
+
+/// Emitted when an expedited proposal bond is refunded (issue #762).
+pub fn expedited_bond_refunded(
+    env: &Env,
+    proposer: &Address,
+    proposal_id: u32,
+    bond: i128,
+    ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("exp_rfnd"), proposer.clone()),
+        (proposal_id, bond, ledger),
+    );
+}
+
+/// Emitted when an expedited proposal bond is slashed for failing quorum (issue #762).
+pub fn expedited_bond_slashed(
+    env: &Env,
+    proposer: &Address,
+    proposal_id: u32,
+    bond: i128,
+    ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("exp_slsh"), proposer.clone()),
+        (proposal_id, bond, ledger),
+    );
+}
+
+/// Emitted when vote delegation with optional expiry is configured (issue #763).
+pub fn vote_delegation_with_expiry_set(
+    env: &Env,
+    delegator: &Address,
+    delegate: &Address,
+    expires_at: Option<u32>,
+    ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("vdel_exp"), delegator.clone()),
+        (delegate.clone(), expires_at, ledger),
+    );
+}
+
+/// Emitted when an external yield strategy adapter is added (issue #764).
+pub fn strategy_added(
+    env: &Env,
+    admin: &Address,
+    adapter: &Address,
+    cap_bps: u32,
+    ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("str_add"), admin.clone()),
+        (adapter.clone(), cap_bps, ledger),
+    );
+}
+
+/// Emitted when idle funds are allocated to a strategy adapter (issue #764).
+pub fn strategy_allocated(
+    env: &Env,
+    keeper: &Address,
+    adapter: &Address,
+    amount: i128,
+    ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("str_alc"), keeper.clone()),
+        (adapter.clone(), amount, ledger),
+    );
+}
+
+/// Emitted when funds are recalled or withdrawn from a strategy adapter (issue #764).
+pub fn strategy_withdrawn(
+    env: &Env,
+    adapter: &Address,
+    amount: i128,
+    ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("str_wdr"), adapter.clone()),
+        (amount, ledger),
+    );
+}
+
+
