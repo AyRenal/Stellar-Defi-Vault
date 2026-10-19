@@ -1637,3 +1637,118 @@ pub fn reward_accumulator_updated(env: &Env, global_index: i128, ledger: u32) {
     );
 }
 
+/// Emitted when parameters for a proposal category are updated (issue #761).
+pub fn category_params_set(
+    env: &Env,
+    admin: &Address,
+    category: u32,
+    quorum_bps: u32,
+    threshold_bps: u32,
+    period_ledgers: u32,
+    ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("cat_prm"), admin.clone()),
+        (category, quorum_bps, threshold_bps, period_ledgers, ledger),
+    );
+}
+
+/// Emitted when an expedited emergency proposal is created (issue #762).
+pub fn expedited_proposal_created(
+    env: &Env,
+    proposer: &Address,
+    proposal_id: u32,
+    bond: i128,
+    ends_at: u32,
+    ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("exp_prop"), proposer.clone()),
+        (proposal_id, bond, ends_at, ledger),
+    );
+}
+
+/// Emitted when an expedited proposal bond is refunded (issue #762).
+pub fn expedited_bond_refunded(
+    env: &Env,
+    proposer: &Address,
+    proposal_id: u32,
+    bond: i128,
+    ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("exp_rfnd"), proposer.clone()),
+        (proposal_id, bond, ledger),
+    );
+}
+
+/// Emitted when an expedited proposal bond is slashed for failing quorum (issue #762).
+pub fn expedited_bond_slashed(
+    env: &Env,
+    proposer: &Address,
+    proposal_id: u32,
+    bond: i128,
+    ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("exp_slsh"), proposer.clone()),
+        (proposal_id, bond, ledger),
+    );
+}
+
+/// Emitted when vote delegation with optional expiry is configured (issue #763).
+pub fn vote_delegation_with_expiry_set(
+    env: &Env,
+    delegator: &Address,
+    delegate: &Address,
+    expires_at: Option<u32>,
+    ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("vdel_exp"), delegator.clone()),
+        (delegate.clone(), expires_at, ledger),
+    );
+}
+
+/// Emitted when an external yield strategy adapter is added (issue #764).
+pub fn strategy_added(
+    env: &Env,
+    admin: &Address,
+    adapter: &Address,
+    cap_bps: u32,
+    ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("str_add"), admin.clone()),
+        (adapter.clone(), cap_bps, ledger),
+    );
+}
+
+/// Emitted when idle funds are allocated to a strategy adapter (issue #764).
+pub fn strategy_allocated(
+    env: &Env,
+    keeper: &Address,
+    adapter: &Address,
+    amount: i128,
+    ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("str_alc"), keeper.clone()),
+        (adapter.clone(), amount, ledger),
+    );
+}
+
+/// Emitted when funds are recalled or withdrawn from a strategy adapter (issue #764).
+pub fn strategy_withdrawn(
+    env: &Env,
+    adapter: &Address,
+    amount: i128,
+    ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("str_wdr"), adapter.clone()),
+        (amount, ledger),
+    );
+}
+
+
