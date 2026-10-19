@@ -14968,3 +14968,5 @@ pub mod position_split_merge;
 pub mod beneficiary_inheritance;
 #[path = "dust_cleanup.rs"]
 pub mod dust_cleanup;
+#[path = "loyalty_points.rs"]
+pub mod loyalty_points;
