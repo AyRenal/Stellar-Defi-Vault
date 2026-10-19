@@ -131,6 +131,14 @@ mod test_token_interface_compliance;
 #[cfg(test)]
 mod test_vec_storage_capacity;
 
+// Issues #652, #653, #655, #656: accounting invariants, extreme share prices,
+// configurable mock token, and explicit authorization tests.
+#[cfg(any(test, feature = "testutils"))]
+pub mod mock_token;
+
+#[cfg(test)]
+mod test_issues_652_653_655_656;
+
 /// Pure math surfaces exposed for property tests and `cargo-fuzz` (issue #661).
 ///
 /// Gated so it never lands in the deployed WASM: the fuzz crate enables the
