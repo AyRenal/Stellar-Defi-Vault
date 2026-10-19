@@ -3,7 +3,7 @@
 //! Handles proposals, voting weights, delegates, veto thresholds, and pending actions.
 
 use crate::storage::{AdminProposal, GovernanceProposal, PendingAction};
-use soroban_sdk::{symbol_short, Address, Env, Vec};
+use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
 pub fn get_admin_proposals(env: &Env) -> Vec<AdminProposal> {
     env.storage()
@@ -139,4 +139,43 @@ pub fn set_emergency_admin(env: &Env, admin: &Address) {
     env.storage()
         .instance()
         .set(&symbol_short!("emg_adm"), admin);
+}
+
+pub fn get_proposal(env: &Env, id: u32) -> Option<GovernanceProposal> {
+    let key = (Symbol::new(env, "prop"), id);
+    env.storage().persistent().get(&key)
+}
+
+pub fn set_proposal(env: &Env, id: u32, proposal: &GovernanceProposal) {
+    let key = (Symbol::new(env, "prop"), id);
+    env.storage().persistent().set(&key, proposal);
+}
+
+pub fn has_voted(env: &Env, proposal_id: u32, voter: &Address) -> bool {
+    let key = (Symbol::new(env, "voted"), proposal_id, voter.clone());
+    env.storage().persistent().get(&key).unwrap_or(false)
+}
+
+pub fn set_voted(env: &Env, proposal_id: u32, voter: &Address) {
+    let key = (Symbol::new(env, "voted"), proposal_id, voter.clone());
+    env.storage().persistent().set(&key, &true);
+}
+
+pub fn get_vote_receipt(
+    env: &Env,
+    proposal_id: u32,
+    voter: &Address,
+) -> Option<crate::storage::VoteReceipt> {
+    let key = (symbol_short!("vt_rcpt"), proposal_id, voter.clone());
+    env.storage().persistent().get(&key)
+}
+
+pub fn set_vote_receipt(
+    env: &Env,
+    proposal_id: u32,
+    voter: &Address,
+    receipt: &crate::storage::VoteReceipt,
+) {
+    let key = (symbol_short!("vt_rcpt"), proposal_id, voter.clone());
+    env.storage().persistent().set(&key, receipt);
 }

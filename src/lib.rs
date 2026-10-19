@@ -56,10 +56,14 @@ pub mod staker_favor_rounding; // issue #457 — always round in the staker's fa
 pub mod staker_network_graph; // issue #456 — staker delegation/referral/mirror network graph
 pub mod time_locked_admin_proposal; // issue #455 -- time-locked admin config-change announcements
 pub mod vault_extensions_463_466; // issues #463-#466 — clawback, NFT boost, milestone, param log
+pub mod vault_extensions_757_760; // issues #757-#760 — referral stats, ve-boost, gauge voting, vote receipt
 pub mod vesting_cliff; // issue #287 — reward vesting cliff // reward-token price peg stabilization
 
 pub use nft::StakeReceiptNFT;
 pub use vault::VaultContract;
+
+#[cfg(test)]
+mod test_issues_757_760;
 
 #[cfg(test)]
 mod test;
