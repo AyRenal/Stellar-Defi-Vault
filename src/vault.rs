@@ -3154,9 +3154,6 @@ impl VaultContract {
         referee: &Address,
         deposit_amount: i128,
     ) -> Result<(), VaultError> {
-        admin::require_admin_as(&env, &admin)?;
-        if base_fee_bps > max_fee_bps || utilization_threshold_bps > BOOST_BPS_BASE {
-            return Err(VaultError::InvalidRate);
         if referrer == referee {
             return Err(VaultError::InvalidAddress);
         }
@@ -3191,32 +3188,12 @@ impl VaultContract {
             return Err(VaultError::InsufficientRewardPool);
         }
 
-    /// Admin: set the per-user reward claim cap and rolling window size.
-    ///
-    /// `max_amount` is the maximum cumulative reward any single user may claim
-    /// within a window of `window_ledgers` ledgers. Pass `0` for `max_amount`
-    /// to disable the cap entirely. The window resets automatically once
-    /// `current_ledger > window_started_at + window_ledgers`.
-    ///
-    /// Unclaimed remainder accrues into the next window — it is never lost.
-    pub fn set_claim_cap(
-        env: Env,
-        admin: Address,
-        max_amount: i128,
-        window_ledgers: u32,
-    ) -> Result<(), VaultError> {
-        admin::require_admin_as(&env, &admin)?;
-        if max_amount < 0 {
-            return Err(VaultError::ZeroAmount);
         if total_bonus > 0 {
             let reward_token = Self::reward_token_address(env)?;
             let client = token::Client::new(env, &reward_token);
             let pool_address = env.current_contract_address();
             if client.balance(&pool_address) < total_bonus {
                 return Err(VaultError::InsufficientRewardPool);
-            }
-            if referrer_bonus > 0 {
-                client.transfer(&pool_address, referrer, &referrer_bonus);
             }
             if referee_bonus > 0 {
                 client.transfer(&pool_address, referee, &referee_bonus);
@@ -3227,11 +3204,15 @@ impl VaultContract {
         balance::set_referrer_of(env, referee, referrer);
         balance::add_referee(env, referrer, referee);
         let mut stats = balance::get_referral_stats(env, referrer);
-        stats.total_referred_stake = stats
-            .total_referred_stake
+        stats.total_referred_deposits = stats
+            .total_referred_deposits
             .checked_add(deposit_amount)
             .ok_or(VaultError::ArithmeticError)?;
-        stats.referral_count = stats.referral_count.saturating_add(1);
+        stats.referee_count = stats.referee_count.saturating_add(1);
+        stats.earned = stats
+            .earned
+            .checked_add(referrer_bonus)
+            .ok_or(VaultError::ArithmeticError)?;
         balance::set_referral_stats(env, referrer, &stats);
         events::referral_bonus_paid(
             env,
@@ -4045,8 +4026,8 @@ impl VaultContract {
             address: address.clone(),
             parent: parent.clone(),
             level,
-            referred_count: stats.referral_count,
-            total_referred_stake: stats.total_referred_stake,
+            referred_count: stats.referee_count,
+            total_referred_stake: stats.total_referred_deposits,
         }
     }
 
@@ -6529,7 +6510,7 @@ impl VaultContract {
         // gross unstaked amount so the leaderboard stays accurate.
         if let Some(referrer) = balance::get_referrer_of(env, staker) {
             let mut stats = balance::get_referral_stats(env, &referrer);
-            stats.total_referred_stake = stats.total_referred_stake.saturating_sub(amount);
+            stats.total_referred_deposits = stats.total_referred_deposits.saturating_sub(amount);
             balance::set_referral_stats(env, &referrer, &stats);
         }
 
@@ -9109,9 +9090,9 @@ impl VaultContract {
 
         let mut stats = balance::get_referral_stats(&env, &effective_referrer);
         if is_new_referral {
-            stats.referral_count += 1;
+            stats.referee_count += 1;
         }
-        stats.total_referred_stake = stats.total_referred_stake.saturating_add(amount);
+        stats.total_referred_deposits = stats.total_referred_deposits.saturating_add(amount);
         balance::set_referral_stats(&env, &effective_referrer, &stats);
 
         Ok(shares)
@@ -9132,7 +9113,7 @@ impl VaultContract {
         while i < registry.len() {
             let referrer = registry.get(i).unwrap();
             let stats = balance::get_referral_stats(&env, &referrer);
-            let stake = stats.total_referred_stake;
+            let stake = stats.total_referred_deposits;
 
             // Find insertion index in the descending-sorted top list.
             let mut ins = top.len(); // default: append at end
@@ -9150,7 +9131,7 @@ impl VaultContract {
                 let entry = ReferralLeaderboardEntry {
                     referrer,
                     total_referred_stake: stake,
-                    referral_count: stats.referral_count,
+                    referral_count: stats.referee_count,
                 };
                 // Rebuild the sorted vec with the new entry at `ins`.
                 let mut new_top: Vec<ReferralLeaderboardEntry> = Vec::new(&env);
@@ -9511,6 +9492,12 @@ impl VaultContract {
         }
         balance::set_proposal(&env, proposal_id, &proposal);
         balance::set_voted(&env, proposal_id, &user);
+        let receipt = crate::storage::VoteReceipt {
+            support,
+            weight,
+            ledger: env.ledger().sequence(),
+        };
+        balance::set_vote_receipt(&env, proposal_id, &user, &receipt);
         events::proposal_voted(
             &env,
             &user,

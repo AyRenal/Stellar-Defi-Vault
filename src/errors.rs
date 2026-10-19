@@ -1260,3 +1260,43 @@ impl From<VaultError> for VaultSafetyError {
         }
     }
 }
+
+/// Errors for referral earnings claim, ve-boost locking, gauge voting, and vote receipts
+/// (issues #757-#760).
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum VaultBoostGaugeError {
+    Unauthorized = 1,
+    NotInitialized = 2,
+    ArithmeticError = 3,
+    ZeroAmount = 4,
+    PositionNotFound = 5,
+    LockNotExpired = 6,
+    DurationTooLong = 7,
+    InvalidDuration = 8,
+    InvalidAllocation = 9,
+    InvalidBounds = 10,
+    SubPoolNotFound = 11,
+    ProposalNotFound = 12,
+    VotingEnded = 13,
+    ProposalEnacted = 14,
+    AlreadyVoted = 15,
+    NotVoted = 16,
+    InsufficientRewardPool = 17,
+}
+
+impl From<VaultError> for VaultBoostGaugeError {
+    fn from(err: VaultError) -> Self {
+        match err {
+            VaultError::Unauthorized => VaultBoostGaugeError::Unauthorized,
+            VaultError::NotInitialized => VaultBoostGaugeError::NotInitialized,
+            VaultError::ArithmeticError => VaultBoostGaugeError::ArithmeticError,
+            VaultError::ZeroAmount => VaultBoostGaugeError::ZeroAmount,
+            VaultError::PositionNotFound => VaultBoostGaugeError::PositionNotFound,
+            VaultError::InsufficientRewardPool => VaultBoostGaugeError::InsufficientRewardPool,
+            _ => VaultBoostGaugeError::Unauthorized,
+        }
+    }
+}
+
