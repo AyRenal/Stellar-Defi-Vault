@@ -376,8 +376,8 @@ impl VaultContract {
     /// - Errors from the pool-seeded check, the unique-depositor cap and the token pull.
     ///
     /// # Events
-    /// Publishes no event itself. The activity-log, position-mirroring and
-    /// low-balance-alert helpers it calls may emit their own.
+    /// Publishes no event itself. The activity-log, position-mirroring,
+    /// low-balance-alert and stake-hook helpers it calls may emit their own.
     pub fn stake(env: Env, user: Address, amount: i128) -> Result<i128, VaultError> {
         user.require_auth();
         // Issue #525: no new deposits once the pool is sunsetting. Checked
@@ -441,6 +441,9 @@ impl VaultContract {
 
         // Issue #544: single-shot low-balance alert on state-changing calls.
         crate::vault_extensions_542_545::check_and_emit_low_balance(&env);
+
+        // Issue #711: notify registered hooks once the stake is finalized.
+        crate::stake_hooks::notify(&env, &user, symbol_short!("stake"), amount);
 
         // Issue #589: best-effort instance TTL bump on a high-traffic path.
         crate::ttl_management::bump(&env);
@@ -6687,6 +6690,9 @@ impl VaultContract {
         let rewards_claimed = balance::get_accrued_reward(env, staker);
         Self::mint_withdrawal_receipt(env, staker, amount_returned, rewards_claimed, penalty_paid);
 
+        // Issue #711: notify registered hooks once the unstake is finalized.
+        crate::stake_hooks::notify(env, staker, symbol_short!("unstake"), amount_returned);
+
         Ok(amount_returned)
     }
 
@@ -9427,6 +9433,8 @@ impl VaultContract {
             enacted: false,
         };
         balance::set_proposal(&env, id, &proposal);
+        // Issue #712: freeze the quorum/threshold that apply to this proposal.
+        crate::governance_params::snapshot(&env, id);
         balance::set_next_proposal_id(&env, id + 1);
         balance::set_open_proposal_count(&env, balance::get_open_proposal_count(&env) + 1);
         events::proposal_created(&env, &user, id, ends_at);
@@ -9510,8 +9518,10 @@ impl VaultContract {
     }
 
     /// Enact a proposal after its voting period ends. Callable by anyone
-    /// (permissionless keeper call) — the change only applies if
-    /// `votes_for > votes_against`; otherwise the proposal is still marked
+    /// (permissionless keeper call) — the change only applies if the proposal
+    /// meets the quorum and pass threshold snapshotted at creation (issue #712),
+    /// or `votes_for > votes_against` when none were configured; otherwise the
+    /// proposal is still marked
     /// enacted (so it cannot be retried) but no parameter changes.
     ///
     /// Reverts with `PositionNotFound` if the proposal does not exist,
@@ -9533,7 +9543,14 @@ impl VaultContract {
         }
 
         proposal.enacted = true;
-        if proposal.votes_for > proposal.votes_against {
+        // Issue #712: quorum, then threshold, from the params snapshotted at
+        // creation (simple majority when none were configured).
+        if crate::governance_params::passes(
+            &env,
+            proposal_id,
+            proposal.votes_for,
+            proposal.votes_against,
+        )? {
             match proposal.parameter {
                 ProposableParam::RewardRate => {
                     let rate = u32::try_from(proposal.new_value)
