@@ -444,6 +444,9 @@ impl VaultContract {
 
         // Issue #589: best-effort instance TTL bump on a high-traffic path.
         crate::ttl_management::bump(&env);
+        // Extend this user's own position/checkpoint/settings entries so a
+        // dormant position isn't archived while the user is actively staking.
+        crate::user_ttl::bump_entries(&env, &user);
 
         Ok(shares_minted)
     }
@@ -1148,8 +1151,8 @@ impl VaultContract {
         let user_payout =
             crate::position_mirroring::apply_mirror_perf_fee(&env, &staker, user_payout)?;
 
+        let reward_token_addr = Self::reward_token_address(&env)?;
         if user_payout > 0 {
-            let reward_token_addr = Self::reward_token_address(&env)?;
             token::Client::new(&env, &reward_token_addr).transfer(
                 &env.current_contract_address(),
                 &staker,
@@ -1167,6 +1170,13 @@ impl VaultContract {
         );
 
         events::claimed(&env, &staker, user_payout, env.ledger().sequence());
+        crate::claim_receipts::record_receipt(
+            &env,
+            &staker,
+            user_payout,
+            &reward_token_addr,
+            &staker,
+        );
         balance::set_last_claim_action_ledger(&env, &staker, env.ledger().sequence());
         Ok(user_payout)
     }
@@ -7727,6 +7737,8 @@ impl VaultContract {
             balance::set_claim_history(env, staker, &claim_history);
 
             events::claimed(env, staker, reward, current_ledger);
+            let token_addr = Self::token_address(env)?;
+            crate::claim_receipts::record_receipt(env, staker, reward, &token_addr, staker);
             return Ok(0);
         }
 
@@ -7805,6 +7817,7 @@ impl VaultContract {
         balance::set_claim_history(env, staker, &claim_history);
 
         events::claimed(env, staker, reward, env.ledger().sequence());
+        crate::claim_receipts::record_receipt(env, staker, reward, &token_addr, staker);
         balance::set_last_updated_ledger(env, env.ledger().sequence()); // Issue #69
 
         // Issue #129: auto-pause if reward balance drops below threshold
@@ -13415,6 +13428,9 @@ impl VaultContract {
         crate::vault_extensions_542_545::check_and_emit_low_balance(env);
         // Issue #589: best-effort instance TTL bump on a high-traffic path.
         crate::ttl_management::bump(env);
+        // Extend the staker's own position/checkpoint/settings entries so a
+        // dormant position isn't archived while the user is actively withdrawing.
+        crate::user_ttl::bump_entries(env, staker);
         Ok(amount)
     }
 
@@ -13481,8 +13497,12 @@ impl VaultContract {
         crate::position_value_appreciation_log::maybe_auto_snapshot(env, staker);
 
         events::claimed(env, staker, user_payout, env.ledger().sequence());
+        crate::claim_receipts::record_receipt(env, staker, user_payout, &reward_token_addr, staker);
         // Issue #544: single-shot low-balance alert on state-changing calls.
         crate::vault_extensions_542_545::check_and_emit_low_balance(env);
+        // Extend the claimer's own position/checkpoint/settings entries so a
+        // dormant position isn't archived while the user is actively claiming.
+        crate::user_ttl::bump_entries(env, staker);
         Ok(user_payout)
     }
 }
@@ -14985,5 +15005,9 @@ pub mod dust_cleanup;
 pub mod fee_change_notice;
 #[path = "sub_pool_delegation.rs"]
 pub mod sub_pool_delegation;
+#[path = "sub_pool_rebalancing.rs"]
+pub mod sub_pool_rebalancing;
 #[path = "quadratic_vote.rs"]
 pub mod quadratic_vote;
+#[path = "benchmark_rate.rs"]
+pub mod benchmark_rate;
