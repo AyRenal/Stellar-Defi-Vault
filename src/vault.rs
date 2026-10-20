@@ -376,8 +376,8 @@ impl VaultContract {
     /// - Errors from the pool-seeded check, the unique-depositor cap and the token pull.
     ///
     /// # Events
-    /// Publishes no event itself. The activity-log, position-mirroring and
-    /// low-balance-alert helpers it calls may emit their own.
+    /// Publishes no event itself. The activity-log, position-mirroring,
+    /// low-balance-alert and stake-hook helpers it calls may emit their own.
     pub fn stake(env: Env, user: Address, amount: i128) -> Result<i128, VaultError> {
         user.require_auth();
         // Issue #525: no new deposits once the pool is sunsetting. Checked
@@ -441,6 +441,9 @@ impl VaultContract {
 
         // Issue #544: single-shot low-balance alert on state-changing calls.
         crate::vault_extensions_542_545::check_and_emit_low_balance(&env);
+
+        // Issue #711: notify registered hooks once the stake is finalized.
+        crate::stake_hooks::notify(&env, &user, symbol_short!("stake"), amount);
 
         // Issue #589: best-effort instance TTL bump on a high-traffic path.
         crate::ttl_management::bump(&env);
@@ -3156,9 +3159,6 @@ impl VaultContract {
         referee: &Address,
         deposit_amount: i128,
     ) -> Result<(), VaultError> {
-        admin::require_admin_as(&env, &admin)?;
-        if base_fee_bps > max_fee_bps || utilization_threshold_bps > BOOST_BPS_BASE {
-            return Err(VaultError::InvalidRate);
         if referrer == referee {
             return Err(VaultError::InvalidAddress);
         }
@@ -3193,32 +3193,12 @@ impl VaultContract {
             return Err(VaultError::InsufficientRewardPool);
         }
 
-    /// Admin: set the per-user reward claim cap and rolling window size.
-    ///
-    /// `max_amount` is the maximum cumulative reward any single user may claim
-    /// within a window of `window_ledgers` ledgers. Pass `0` for `max_amount`
-    /// to disable the cap entirely. The window resets automatically once
-    /// `current_ledger > window_started_at + window_ledgers`.
-    ///
-    /// Unclaimed remainder accrues into the next window — it is never lost.
-    pub fn set_claim_cap(
-        env: Env,
-        admin: Address,
-        max_amount: i128,
-        window_ledgers: u32,
-    ) -> Result<(), VaultError> {
-        admin::require_admin_as(&env, &admin)?;
-        if max_amount < 0 {
-            return Err(VaultError::ZeroAmount);
         if total_bonus > 0 {
             let reward_token = Self::reward_token_address(env)?;
             let client = token::Client::new(env, &reward_token);
             let pool_address = env.current_contract_address();
             if client.balance(&pool_address) < total_bonus {
                 return Err(VaultError::InsufficientRewardPool);
-            }
-            if referrer_bonus > 0 {
-                client.transfer(&pool_address, referrer, &referrer_bonus);
             }
             if referee_bonus > 0 {
                 client.transfer(&pool_address, referee, &referee_bonus);
@@ -3229,11 +3209,15 @@ impl VaultContract {
         balance::set_referrer_of(env, referee, referrer);
         balance::add_referee(env, referrer, referee);
         let mut stats = balance::get_referral_stats(env, referrer);
-        stats.total_referred_stake = stats
-            .total_referred_stake
+        stats.total_referred_deposits = stats
+            .total_referred_deposits
             .checked_add(deposit_amount)
             .ok_or(VaultError::ArithmeticError)?;
-        stats.referral_count = stats.referral_count.saturating_add(1);
+        stats.referee_count = stats.referee_count.saturating_add(1);
+        stats.earned = stats
+            .earned
+            .checked_add(referrer_bonus)
+            .ok_or(VaultError::ArithmeticError)?;
         balance::set_referral_stats(env, referrer, &stats);
         events::referral_bonus_paid(
             env,
@@ -4047,8 +4031,8 @@ impl VaultContract {
             address: address.clone(),
             parent: parent.clone(),
             level,
-            referred_count: stats.referral_count,
-            total_referred_stake: stats.total_referred_stake,
+            referred_count: stats.referee_count,
+            total_referred_stake: stats.total_referred_deposits,
         }
     }
 
@@ -6531,7 +6515,7 @@ impl VaultContract {
         // gross unstaked amount so the leaderboard stays accurate.
         if let Some(referrer) = balance::get_referrer_of(env, staker) {
             let mut stats = balance::get_referral_stats(env, &referrer);
-            stats.total_referred_stake = stats.total_referred_stake.saturating_sub(amount);
+            stats.total_referred_deposits = stats.total_referred_deposits.saturating_sub(amount);
             balance::set_referral_stats(env, &referrer, &stats);
         }
 
@@ -6707,6 +6691,9 @@ impl VaultContract {
         let penalty_paid = amount - amount_after_penalty;
         let rewards_claimed = balance::get_accrued_reward(env, staker);
         Self::mint_withdrawal_receipt(env, staker, amount_returned, rewards_claimed, penalty_paid);
+
+        // Issue #711: notify registered hooks once the unstake is finalized.
+        crate::stake_hooks::notify(env, staker, symbol_short!("unstake"), amount_returned);
 
         Ok(amount_returned)
     }
@@ -9111,9 +9098,9 @@ impl VaultContract {
 
         let mut stats = balance::get_referral_stats(&env, &effective_referrer);
         if is_new_referral {
-            stats.referral_count += 1;
+            stats.referee_count += 1;
         }
-        stats.total_referred_stake = stats.total_referred_stake.saturating_add(amount);
+        stats.total_referred_deposits = stats.total_referred_deposits.saturating_add(amount);
         balance::set_referral_stats(&env, &effective_referrer, &stats);
 
         Ok(shares)
@@ -9134,7 +9121,7 @@ impl VaultContract {
         while i < registry.len() {
             let referrer = registry.get(i).unwrap();
             let stats = balance::get_referral_stats(&env, &referrer);
-            let stake = stats.total_referred_stake;
+            let stake = stats.total_referred_deposits;
 
             // Find insertion index in the descending-sorted top list.
             let mut ins = top.len(); // default: append at end
@@ -9152,7 +9139,7 @@ impl VaultContract {
                 let entry = ReferralLeaderboardEntry {
                     referrer,
                     total_referred_stake: stake,
-                    referral_count: stats.referral_count,
+                    referral_count: stats.referee_count,
                 };
                 // Rebuild the sorted vec with the new entry at `ins`.
                 let mut new_top: Vec<ReferralLeaderboardEntry> = Vec::new(&env);
@@ -9449,6 +9436,8 @@ impl VaultContract {
             weight_mode: balance::get_vote_weight_mode(&env),
         };
         balance::set_proposal(&env, id, &proposal);
+        // Issue #712: freeze the quorum/threshold that apply to this proposal.
+        crate::governance_params::snapshot(&env, id);
         balance::set_next_proposal_id(&env, id + 1);
         balance::set_open_proposal_count(&env, balance::get_open_proposal_count(&env) + 1);
         events::proposal_created(&env, &user, id, ends_at);
@@ -9520,6 +9509,12 @@ impl VaultContract {
         }
         balance::set_proposal(&env, proposal_id, &proposal);
         balance::set_voted(&env, proposal_id, &user);
+        let receipt = crate::storage::VoteReceipt {
+            support,
+            weight,
+            ledger: env.ledger().sequence(),
+        };
+        balance::set_vote_receipt(&env, proposal_id, &user, &receipt);
         events::proposal_voted(
             &env,
             &user,
@@ -9532,8 +9527,10 @@ impl VaultContract {
     }
 
     /// Enact a proposal after its voting period ends. Callable by anyone
-    /// (permissionless keeper call) — the change only applies if
-    /// `votes_for > votes_against`; otherwise the proposal is still marked
+    /// (permissionless keeper call) — the change only applies if the proposal
+    /// meets the quorum and pass threshold snapshotted at creation (issue #712),
+    /// or `votes_for > votes_against` when none were configured; otherwise the
+    /// proposal is still marked
     /// enacted (so it cannot be retried) but no parameter changes.
     ///
     /// Reverts with `PositionNotFound` if the proposal does not exist,
@@ -9555,7 +9552,14 @@ impl VaultContract {
         }
 
         proposal.enacted = true;
-        if proposal.votes_for > proposal.votes_against {
+        // Issue #712: quorum, then threshold, from the params snapshotted at
+        // creation (simple majority when none were configured).
+        if crate::governance_params::passes(
+            &env,
+            proposal_id,
+            proposal.votes_for,
+            proposal.votes_against,
+        )? {
             match proposal.parameter {
                 ProposableParam::RewardRate => {
                     let rate = u32::try_from(proposal.new_value)
