@@ -14970,3 +14970,5 @@ pub mod beneficiary_inheritance;
 pub mod dust_cleanup;
 #[path = "loyalty_points.rs"]
 pub mod loyalty_points;
+#[path = "claim_streak.rs"]
+pub mod claim_streak;
