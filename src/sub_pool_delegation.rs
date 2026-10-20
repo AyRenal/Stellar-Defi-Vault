@@ -145,6 +145,35 @@ fn find_sub_pool_index(pools: &Vec<SubPool>, id: u32) -> Option<u32> {
     None
 }
 
+/// Crate-internal: `sub_pool_id`'s current `(total_staked, max_capacity)`,
+/// if it exists. Used by keeper-triggered rebalancing
+/// (`sub_pool_rebalancing.rs`) to read a pool's current utilization without
+/// exposing the whole `SubPool` mutation surface.
+pub(crate) fn get_sub_pool_capacity_state(env: &Env, sub_pool_id: u32) -> Option<(i128, i128)> {
+    let pools = get_sub_pools(env);
+    let idx = find_sub_pool_index(&pools, sub_pool_id)?;
+    let pool = pools.get(idx).unwrap();
+    Some((pool.total_staked, pool.max_capacity))
+}
+
+/// Crate-internal: overwrites `sub_pool_id`'s `max_capacity` in place.
+/// Used by keeper-triggered rebalancing (`sub_pool_rebalancing.rs`) to
+/// shift capacity between pools without touching `total_staked` or any
+/// user's own position.
+pub(crate) fn set_sub_pool_max_capacity(
+    env: &Env,
+    sub_pool_id: u32,
+    new_capacity: i128,
+) -> Result<(), VaultExtError> {
+    let mut pools = get_sub_pools(env);
+    let idx = find_sub_pool_index(&pools, sub_pool_id).ok_or(VaultExtError::PositionNotFound)?;
+    let mut pool = pools.get(idx).unwrap();
+    pool.max_capacity = new_capacity;
+    pools.set(idx, pool);
+    set_sub_pools(env, &pools);
+    Ok(())
+}
+
 // ── Reward settlement helper ──────────────────────────────────────────────────
 
 /// Settle time-weighted rewards for `user` in `sub_pool_id` up to the current

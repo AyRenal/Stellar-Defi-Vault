@@ -88,6 +88,7 @@ const REASON_NOT_FOUND: &str = "proposal_not_found";
 const REASON_ALREADY_VOTED: &str = "already_voted";
 const REASON_ENDED: &str = "voting_ended";
 const REASON_ENACTED: &str = "proposal_enacted";
+const REASON_CANCELLED: &str = "proposal_cancelled";
 const REASON_NO_POSITION: &str = "no_position";
 
 #[cfg_attr(not(feature = "testutils"), contractimpl)]
@@ -140,6 +141,10 @@ impl VaultContract {
 
             if proposal.enacted {
                 results.push_back((id, false, String::from_str(&env, REASON_ENACTED)));
+                continue;
+            }
+            if crate::vault::proposal_cancel::is_cancelled(&env, id) {
+                results.push_back((id, false, String::from_str(&env, REASON_CANCELLED)));
                 continue;
             }
             if now > proposal.ends_at {

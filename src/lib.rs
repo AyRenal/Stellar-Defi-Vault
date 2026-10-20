@@ -16,6 +16,7 @@
 
 mod admin;
 mod balance;
+pub mod claim_receipts;
 mod errors;
 mod events;
 pub mod example_consumer;
@@ -24,6 +25,8 @@ pub mod nft;
 pub mod reward_accumulator;
 mod reward_math;
 mod storage;
+pub mod ttl_management;
+pub mod user_ttl;
 pub mod vault;
 
 pub mod commitment;
@@ -137,8 +140,16 @@ mod test_token_interface_compliance;
 mod test_vec_storage_capacity;
 
 #[cfg(test)]
-mod test_issues_761_764;
+mod test_loyalty_points;
 
+#[cfg(test)]
+mod test_claim_streak;
+
+#[cfg(test)]
+mod test_issue_754;
+
+#[cfg(test)]
+mod test_solvency_report;
 
 /// Pure math surfaces exposed for property tests and `cargo-fuzz` (issue #661).
 ///
