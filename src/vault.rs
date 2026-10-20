@@ -9442,15 +9442,32 @@ impl VaultContract {
         duration_ledgers: u32,
     ) -> Result<u32, VaultError> {
         user.require_auth();
-        if balance::get_shares(&env, &user) == 0 {
+        let proposer_shares = balance::get_shares(&env, &user);
+        if proposer_shares == 0 {
             return Err(VaultError::PositionNotFound);
+        }
+        // Minimum-stake gate (distinct from `balance::get_min_stake`, which
+        // floors a *deposit*): a proposer must hold at least
+        // `proposal_requirements::min_stake_amount()` of staked token value
+        // to deter spam proposals from near-empty positions.
+        let min_stake = proposal_requirements::min_stake_amount(&env);
+        if min_stake > 0 {
+            let total_shares = balance::get_total_shares(&env);
+            let total_deposited = balance::get_total_deposited(&env);
+            let staked_amount =
+                balance::shares_to_amount(total_shares, total_deposited, proposer_shares)
+                    .ok_or(VaultError::ArithmeticError)?;
+            if staked_amount < min_stake {
+                return Err(VaultError::PositionNotFound);
+            }
         }
         if balance::get_open_proposal_count(&env) >= MAX_OPEN_PROPOSALS {
             return Err(VaultError::MaxPositionsReached);
         }
 
         let id = balance::get_next_proposal_id(&env);
-        let ends_at = env.ledger().sequence().saturating_add(duration_ledgers);
+        let created_at = env.ledger().sequence();
+        let ends_at = created_at.saturating_add(duration_ledgers);
         let proposal = GovernanceProposal {
             id,
             parameter,
@@ -9461,6 +9478,20 @@ impl VaultContract {
             enacted: false,
             weight_mode: balance::get_vote_weight_mode(&env),
         };
+
+        // Pairs with `cancel_proposal` (`proposal_cancel.rs`): pull the
+        // admin-configured bond, if any, and record who proposed this and
+        // when, so only this proposer can cancel it within the allowed
+        // window and get the bond back.
+        let bond_due = proposal_cancel::bond_amount(&env);
+        let bond_paid = if bond_due > 0 {
+            let token_addr = Self::token_address(&env)?;
+            crate::transfer_safety::pull_tokens(&env, &token_addr, &user, bond_due)?
+        } else {
+            0
+        };
+        proposal_cancel::record_proposal_created(&env, id, &user, created_at, bond_paid);
+
         balance::set_proposal(&env, id, &proposal);
         balance::set_next_proposal_id(&env, id + 1);
         balance::set_open_proposal_count(&env, balance::get_open_proposal_count(&env) + 1);
@@ -9504,6 +9535,9 @@ impl VaultContract {
         if proposal.enacted || env.ledger().sequence() > proposal.ends_at {
             return Err(VaultError::BatchKycTooLarge);
         }
+        if proposal_cancel::is_cancelled(&env, proposal_id) {
+            return Err(VaultError::BatchKycTooLarge);
+        }
 
         let total_shares = balance::get_total_shares(&env);
         let total_deposited = balance::get_total_deposited(&env);
@@ -9533,6 +9567,10 @@ impl VaultContract {
         }
         balance::set_proposal(&env, proposal_id, &proposal);
         balance::set_voted(&env, proposal_id, &user);
+        // Freeze (support, weight) so a later `change_vote` moves exactly
+        // this weight between sides instead of re-deriving it from the
+        // caller's (possibly since-changed) balance.
+        vote_change::record_vote(&env, &user, proposal_id, support, weight);
         events::proposal_voted(
             &env,
             &user,
@@ -9558,12 +9596,33 @@ impl VaultContract {
         if proposal.enacted {
             return Err(VaultError::AlreadyInitialized);
         }
-        if env.ledger().sequence() <= proposal.ends_at {
+        if proposal_cancel::is_cancelled(&env, proposal_id) {
+            return Err(VaultError::BatchKycTooLarge);
+        }
+        let now = env.ledger().sequence();
+        if now <= proposal.ends_at {
             return Err(VaultError::EpochNotFinalized);
+        }
+        // Guardian veto safeguard: a proposal that passed its vote must sit
+        // through its execution delay before it can be enacted, giving the
+        // guardian a window to veto it (see `guardian_veto.rs`). A failed
+        // proposal has nothing to veto, so it needs no delay.
+        if proposal.votes_for > proposal.votes_against {
+            let executable_at = proposal
+                .ends_at
+                .saturating_add(guardian_veto::execution_delay_ledgers(&env));
+            if now < executable_at {
+                return Err(VaultError::EpochNotFinalized);
+            }
         }
         // Issue #241: a vetoed proposal can never be enacted, even if it
         // passed the vote threshold.
         if balance::get_proposal_vetoer(&env, proposal_id).is_some() {
+            return Err(VaultError::BatchKycTooLarge);
+        }
+        // A guardian veto, like the stake-weighted one above, permanently
+        // blocks enactment.
+        if guardian_veto::is_vetoed(&env, proposal_id) {
             return Err(VaultError::BatchKycTooLarge);
         }
 
@@ -9615,6 +9674,15 @@ impl VaultContract {
             proposal.new_value,
             total_votes,
             env.ledger().sequence(),
+        );
+        // Resolve this proposal's bond (if any) purely on whether it
+        // reached quorum, independent of whether it passed or failed — see
+        // `proposal_requirements.rs` for why.
+        proposal_requirements::settle_bond(
+            &env,
+            proposal_id,
+            proposal.votes_for,
+            proposal.votes_against,
         );
         Ok(())
     }
@@ -15011,3 +15079,13 @@ pub mod sub_pool_rebalancing;
 pub mod quadratic_vote;
 #[path = "benchmark_rate.rs"]
 pub mod benchmark_rate;
+#[path = "guardian_pause.rs"]
+pub mod guardian_pause;
+#[path = "guardian_veto.rs"]
+pub mod guardian_veto;
+#[path = "vote_change.rs"]
+pub mod vote_change;
+#[path = "proposal_cancel.rs"]
+pub mod proposal_cancel;
+#[path = "proposal_requirements.rs"]
+pub mod proposal_requirements;
