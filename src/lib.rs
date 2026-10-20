@@ -137,6 +137,12 @@ mod test_loyalty_points;
 #[cfg(test)]
 mod test_claim_streak;
 
+#[cfg(test)]
+mod test_issue_754;
+
+#[cfg(test)]
+mod test_solvency_report;
+
 /// Pure math surfaces exposed for property tests and `cargo-fuzz` (issue #661).
 ///
 /// Gated so it never lands in the deployed WASM: the fuzz crate enables the

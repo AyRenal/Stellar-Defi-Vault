@@ -6620,7 +6620,11 @@ impl VaultContract {
             // revenue-share and treasury routing of the remainder.
             let insurance_share =
                 crate::vault_extensions_701_704::take_insurance_share(env, unstake_fee)?;
-            let distributable_fee = unstake_fee - insurance_share;
+            // Issue #754: recycle a configured share of the post-insurance fee
+            // into the reward pool before revenue-share/treasury routing.
+            let recyclable_fee = unstake_fee - insurance_share;
+            let recycled_fee = crate::vault::fee_recycle::recycle_fee(env, recyclable_fee)?;
+            let distributable_fee = recyclable_fee - recycled_fee;
             let rev_share_portion = if let Some(rev_cfg) = balance::get_revenue_sharing_config(env) {
                 if rev_cfg.share_bps > 0 {
                     (distributable_fee * rev_cfg.share_bps as i128) / BOOST_BPS_BASE as i128
@@ -11666,16 +11670,21 @@ impl VaultContract {
             .ok_or(VaultFeatureError::ArithmeticError)?
             / BOOST_BPS_BASE as i128;
         if fee > 0 {
+            // Issue #754: recycle a configured share into the reward pool
+            // before revenue-share/slash-treasury routing.
+            let recyclable_fee = fee
+                - crate::vault::fee_recycle::recycle_fee(&env, fee)
+                    .map_err(|_| VaultFeatureError::ArithmeticError)?;
             let rev_share_portion = if let Some(rev_cfg) = balance::get_revenue_sharing_config(&env) {
                 if rev_cfg.share_bps > 0 {
-                    (fee * rev_cfg.share_bps as i128) / BOOST_BPS_BASE as i128
+                    (recyclable_fee * rev_cfg.share_bps as i128) / BOOST_BPS_BASE as i128
                 } else {
                     0
                 }
             } else {
                 0
             };
-            let treasury_fee = fee - rev_share_portion;
+            let treasury_fee = recyclable_fee - rev_share_portion;
             if rev_share_portion > 0 {
                 let rev_pool = balance::get_revenue_share_pool(&env);
                 balance::set_revenue_share_pool(&env, rev_pool + rev_share_portion);
@@ -14972,3 +14981,7 @@ pub mod dust_cleanup;
 pub mod loyalty_points;
 #[path = "claim_streak.rs"]
 pub mod claim_streak;
+#[path = "fee_recycle.rs"]
+pub mod fee_recycle;
+#[path = "solvency_report.rs"]
+pub mod solvency_report;
