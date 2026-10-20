@@ -505,12 +505,32 @@ pub struct RateHistoryEntry {
     pub changed_by: Address,
 }
 
-/// Accumulated referral stats stored per referrer.
+/// Accumulated referral stats stored per referrer (issue #757).
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReferralStats {
-    pub total_referred_stake: i128,
-    pub referral_count: u32,
+    pub referee_count: u32,
+    pub total_referred_deposits: i128,
+    pub earned: i128,
+    pub claimed: i128,
+}
+
+/// Receipt for a cast governance vote (issue #760).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct VoteReceipt {
+    pub support: bool,
+    pub weight: i128,
+    pub ledger: u32,
+}
+
+/// Vote-escrow style reward boost lock (issue #758).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct VeBoostLock {
+    pub amount: i128,
+    pub unlock_ledger: u32,
+    pub duration_ledgers: u32,
 }
 
 /// Result of `get_boost_tier_progress` showing where a user is toward the next boost tier.
