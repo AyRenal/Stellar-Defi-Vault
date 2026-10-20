@@ -18,7 +18,7 @@ use crate::{
         InsurancePolicy, InsuranceProduct, InterfaceId, LeaderboardEntry, Loan, LoanConfig,
         LotteryConfig, MerkleRoot, MigrationExport, Milestone, MilestoneCondition, MultisigConfig,
         OptimalClaimAdvice, PauseInfo, PauseReason, PendingAction, PoolComparison, PoolConfig,
-        PoolHealthReport, PoolStats, PredictionMarket, PriceCondition, PriorityBidRecord, ProposableParam,
+        PoolHealthReport, PoolStats, PredictionMarket, PriceCondition, PriorityBidRecord, ProposableParam, VoteWeightMode,
         RateHistoryEntry, ReferralLeaderboardEntry, ReferralTreeNode, ReputationScore,
         RewardMultiplierBreakdown, RevenueShareMerkleRoot, RevenueSharingConfig, RoundingPolicy,
         Season, SmoothingSchedule, SmoothingStatus,
@@ -34,7 +34,7 @@ use crate::{
         LeaderboardEntry, Loan, LoanConfig, LotteryConfig, MatchingProgram, MerkleRoot,
         MigrationExport, Milestone, MilestoneCondition, MultisigConfig, OptimalClaimAdvice,
         PauseInfo, PauseReason, PendingAction, PoolComparison, PoolConfig, PoolHealthReport,
-        PoolStats, PredictionMarket, PriceCondition, PriorityBidRecord, ProposableParam, Quiz,
+        PoolStats, PredictionMarket, PriceCondition, PriorityBidRecord, ProposableParam, Quiz, VoteWeightMode,
         RateChange, RateHistoryEntry, ReferralLeaderboardEntry, ReferralTreeNode, ReputationScore,
         RevenueShareMerkleRoot, RevenueSharingConfig, RewardMultiplierBreakdown, RewardTier,
         RoundingPolicy, Season, SmoothingSchedule, SmoothingStatus, StakeAction, StakeHistoryEntry,
@@ -1143,6 +1143,10 @@ impl VaultContract {
             crate::stake_funded_bug_bounty::deduct_bounty_contribution(&env, &staker, amount);
         let reward_after_bounty = amount.saturating_sub(bounty_contribution);
         let user_payout = crate::claim_fee::apply_claim_fee(&env, &staker, reward_after_bounty)?;
+        // Deduct mirror performance fee when the follower has opted in; net
+        // payout to the follower is reduced and the fee goes directly to the leader.
+        let user_payout =
+            crate::position_mirroring::apply_mirror_perf_fee(&env, &staker, user_payout)?;
 
         if user_payout > 0 {
             let reward_token_addr = Self::reward_token_address(&env)?;
@@ -2970,10 +2974,9 @@ impl VaultContract {
             return Err(VaultError::Unauthorized);
         }
         admin.require_auth();
-        if bps > 500 {
-            return Err(VaultError::UnstakeFeeTooHigh);
-        }
-        balance::set_unstake_fee_bps(&env, bps);
+        // Routes through the ceiling check (MAX_FEE_BPS) and notice-period
+        // gate: increases are queued; decreases apply immediately.
+        crate::fee_change_notice::propose_fee_change(&env, bps)?;
         Ok(())
     }
 
@@ -3045,10 +3048,9 @@ impl VaultContract {
     /// `UnstakeFeeTooHigh`.
     pub fn set_unstake_fee_bps(env: Env, admin: Address, bps: u32) -> Result<(), VaultError> {
         admin::require_admin_as(&env, &admin)?;
-        if bps > MAX_UNSTAKE_FEE_BPS {
-            return Err(VaultError::UnstakeFeeTooHigh);
-        }
-        balance::set_unstake_fee_bps(&env, bps);
+        // Routes through the ceiling check (MAX_FEE_BPS) and notice-period
+        // gate: increases are queued; decreases apply immediately.
+        crate::fee_change_notice::propose_fee_change(&env, bps)?;
         Ok(())
     /// Take a valuation snapshot of user's staking position (callable by owner or keeper).
     pub fn take_value_snapshot(
@@ -9444,6 +9446,7 @@ impl VaultContract {
             votes_against: 0,
             ends_at,
             enacted: false,
+            weight_mode: balance::get_vote_weight_mode(&env),
         };
         balance::set_proposal(&env, id, &proposal);
         balance::set_next_proposal_id(&env, id + 1);
@@ -9491,8 +9494,14 @@ impl VaultContract {
 
         let total_shares = balance::get_total_shares(&env);
         let total_deposited = balance::get_total_deposited(&env);
-        let own_weight = balance::shares_to_amount(total_shares, total_deposited, shares)
+        let raw_weight = balance::shares_to_amount(total_shares, total_deposited, shares)
             .ok_or(VaultError::ArithmeticError)?;
+        // Apply weighting mode snapshotted at proposal creation time so that
+        // a mode change by the admin never alters an already-open proposal.
+        let own_weight = match proposal.weight_mode {
+            VoteWeightMode::Linear => raw_weight,
+            VoteWeightMode::Quadratic => crate::quadratic_vote::isqrt(raw_weight),
+        };
         let delegated_weight = balance::get_delegated_vote_weight(&env, &user);
         let weight = own_weight
             .checked_add(delegated_weight)
@@ -13434,6 +13443,10 @@ impl VaultContract {
             crate::stake_funded_bug_bounty::deduct_bounty_contribution(env, staker, accrued);
         let reward_after_bounty = accrued.saturating_sub(bounty_contribution);
         let user_payout = crate::claim_fee::apply_claim_fee(env, staker, reward_after_bounty)?;
+        // Deduct mirror performance fee when the follower has opted in; net
+        // payout to the follower is reduced and the fee goes directly to the leader.
+        let user_payout =
+            crate::position_mirroring::apply_mirror_perf_fee(env, staker, user_payout)?;
 
         if user_payout > 0 {
             reward_token_client.transfer(&env.current_contract_address(), staker, &user_payout);
@@ -14968,3 +14981,9 @@ pub mod position_split_merge;
 pub mod beneficiary_inheritance;
 #[path = "dust_cleanup.rs"]
 pub mod dust_cleanup;
+#[path = "fee_change_notice.rs"]
+pub mod fee_change_notice;
+#[path = "sub_pool_delegation.rs"]
+pub mod sub_pool_delegation;
+#[path = "quadratic_vote.rs"]
+pub mod quadratic_vote;

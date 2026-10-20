@@ -15,7 +15,7 @@ use soroban_sdk::{
 use crate::storage::{BrandingConfig, DataKey, PauseReason};
 use crate::vault::{
     VaultContract, VaultContractClient, MAX_BRANDING_LOGO_LEN, MAX_BRANDING_NAME_LEN,
-    MAX_BRANDING_TWITTER_LEN, MAX_BRANDING_URL_LEN, MAX_UNSTAKE_FEE_BPS,
+    MAX_BRANDING_TWITTER_LEN, MAX_BRANDING_URL_LEN,
 };
 use crate::{admin, balance, events};
 
@@ -149,10 +149,10 @@ impl VaultContract {
     /// Treasurer/admin: set the unstake fee in bps, max 500 (same as `set_unstake_fee_bps`).
     pub fn set_fee(env: Env, caller: Address, bps: u32) -> Result<(), RoleError> {
         authorize(&env, &caller, Role::Treasurer)?;
-        if bps > MAX_UNSTAKE_FEE_BPS {
-            return Err(RoleError::InvalidValue);
-        }
-        balance::set_unstake_fee_bps(&env, bps);
+        // Routes through the ceiling check (MAX_FEE_BPS) and notice-period
+        // gate: increases are queued; decreases apply immediately.
+        crate::fee_change_notice::propose_fee_change(&env, bps)
+            .map_err(|_| RoleError::InvalidValue)?;
         Ok(())
     }
 

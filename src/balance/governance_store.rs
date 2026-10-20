@@ -2,8 +2,24 @@
 //!
 //! Handles proposals, voting weights, delegates, veto thresholds, and pending actions.
 
-use crate::storage::{AdminProposal, GovernanceProposal, PendingAction};
+use crate::storage::{AdminProposal, GovernanceProposal, PendingAction, VoteWeightMode};
 use soroban_sdk::{symbol_short, Address, Env, Vec};
+
+// ── Vote weight mode ──────────────────────────────────────────────────────────
+
+/// Pool-wide vote weight mode (snapshotted per proposal at creation time).
+pub fn get_vote_weight_mode(env: &Env) -> VoteWeightMode {
+    env.storage()
+        .instance()
+        .get(&symbol_short!("vw_mode"))
+        .unwrap_or(VoteWeightMode::Linear)
+}
+
+pub fn set_vote_weight_mode(env: &Env, mode: VoteWeightMode) {
+    env.storage().instance().set(&symbol_short!("vw_mode"), &mode);
+}
+
+// ── Proposal Vec store ────────────────────────────────────────────────────────
 
 pub fn get_admin_proposals(env: &Env) -> Vec<AdminProposal> {
     env.storage()
@@ -139,4 +155,78 @@ pub fn set_emergency_admin(env: &Env, admin: &Address) {
     env.storage()
         .instance()
         .set(&symbol_short!("emg_adm"), admin);
+}
+
+// ── Proposal CRUD helpers ─────────────────────────────────────────────────────
+
+/// Retrieve a single proposal by id, or `None` if it doesn't exist.
+pub fn get_proposal(env: &Env, id: u32) -> Option<GovernanceProposal> {
+    let proposals = get_governance_proposals(env);
+    for i in 0..proposals.len() {
+        let p = proposals.get(i).unwrap();
+        if p.id == id {
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// Insert or replace a proposal (matched by `id`) in the stored Vec.
+pub fn set_proposal(env: &Env, id: u32, proposal: &GovernanceProposal) {
+    let mut proposals = get_governance_proposals(env);
+    for i in 0..proposals.len() {
+        if proposals.get(i).unwrap().id == id {
+            proposals.set(i, proposal.clone());
+            set_governance_proposals(env, &proposals);
+            return;
+        }
+    }
+    // Not found — append as a new entry.
+    proposals.push_back(proposal.clone());
+    set_governance_proposals(env, &proposals);
+}
+
+// ── Per-user per-proposal voted flag ─────────────────────────────────────────
+
+pub fn has_voted(env: &Env, proposal_id: u32, user: &Address) -> bool {
+    env.storage()
+        .persistent()
+        .get(&(symbol_short!("p_voted"), proposal_id, user.clone()))
+        .unwrap_or(false)
+}
+
+pub fn set_voted(env: &Env, proposal_id: u32, user: &Address) {
+    env.storage()
+        .persistent()
+        .set(&(symbol_short!("p_voted"), proposal_id, user.clone()), &true);
+}
+
+// ── Monotonic proposal id counter ────────────────────────────────────────────
+
+pub fn get_next_proposal_id(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&symbol_short!("p_next_id"))
+        .unwrap_or(0)
+}
+
+pub fn set_next_proposal_id(env: &Env, id: u32) {
+    env.storage()
+        .instance()
+        .set(&symbol_short!("p_next_id"), &id);
+}
+
+// ── Open proposal count ───────────────────────────────────────────────────────
+
+pub fn get_open_proposal_count(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&symbol_short!("p_open"))
+        .unwrap_or(0)
+}
+
+pub fn set_open_proposal_count(env: &Env, count: u32) {
+    env.storage()
+        .instance()
+        .set(&symbol_short!("p_open"), &count);
 }

@@ -1637,3 +1637,41 @@ pub fn reward_accumulator_updated(env: &Env, global_index: i128, ledger: u32) {
     );
 }
 
+
+/// Emitted when a follower's reward claim triggers a mirror performance fee
+/// paid to their leader.
+///
+/// Topics: `("mir_fee_paid", follower)`.
+/// Data: `(leader, fee_amount, net_payout_to_follower, ledger)`.
+pub fn mirror_fee_paid(
+    env: &Env,
+    follower: &Address,
+    leader: &Address,
+    fee_amount: i128,
+    net_payout: i128,
+    ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("mir_fee"), follower),
+        (leader.clone(), fee_amount, net_payout, ledger),
+    );
+}
+
+/// Emitted when the admin changes the pool-wide vote weight mode.
+///
+/// Topics: `("vw_mode_chg", admin)`.
+/// Data: `(new_mode, ledger)`.
+///
+/// Note: the change only affects proposals created *after* this event —
+/// open proposals retain the mode that was active at their creation time.
+pub fn vote_weight_mode_changed(
+    env: &Env,
+    admin: &Address,
+    new_mode: crate::storage::VoteWeightMode,
+    ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("vw_mode_chg"), admin),
+        (new_mode, ledger),
+    );
+}

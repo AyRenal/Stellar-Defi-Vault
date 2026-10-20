@@ -775,11 +775,35 @@ pub enum ProposableParam {
     MinStake,
 }
 
+/// How vote weight is computed for a governance proposal.
+///
+/// The mode is **snapshotted at proposal-creation time** so that a mid-vote
+/// mode change by the admin cannot alter the weighting rules of an already-open
+/// proposal.
+///
+/// # Quadratic weighting caveat
+///
+/// Quadratic weighting reduces whale dominance: a holder with 10 000 tokens
+/// gets `sqrt(10 000) = 100` weight instead of 10 000.  However, it is easy
+/// to bypass by splitting stake across multiple wallets, so meaningful
+/// protection requires a complementary identity/sybil-resistance layer
+/// (e.g. the existing KYC or proof-of-humanity hook).  Use with awareness.
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum VoteWeightMode {
+    /// Weight = staked token amount.  This is the default.
+    Linear,
+    /// Weight = integer square root of staked token amount.
+    /// Rounds down; a position worth 0 still has 0 weight.
+    Quadratic,
+}
+
 /// A governance proposal to change a pool parameter, created via
 /// `create_proposal` and resolved via `enact_proposal` (issue #216).
 ///
 /// Voting power is the staker's token amount at the time of the `vote` call,
 /// not adjusted retroactively if the staker's position changes afterward.
+/// The `weight_mode` is fixed at creation time from the pool-wide setting.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct GovernanceProposal {
@@ -790,6 +814,9 @@ pub struct GovernanceProposal {
     pub votes_against: i128,
     pub ends_at: u32,
     pub enacted: bool,
+    /// Weighting mode active when this proposal was created.
+    /// Immutable after creation so mode changes don't affect open proposals.
+    pub weight_mode: VoteWeightMode,
 }
 
 // ── Issue #207: cross-chain bridge relayer hook ──────────────────────────────
