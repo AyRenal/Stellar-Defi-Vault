@@ -5,6 +5,22 @@
 use crate::storage::{AdminProposal, GovernanceProposal, PendingAction};
 use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
+// ── Vote weight mode ──────────────────────────────────────────────────────────
+
+/// Pool-wide vote weight mode (snapshotted per proposal at creation time).
+pub fn get_vote_weight_mode(env: &Env) -> VoteWeightMode {
+    env.storage()
+        .instance()
+        .get(&symbol_short!("vw_mode"))
+        .unwrap_or(VoteWeightMode::Linear)
+}
+
+pub fn set_vote_weight_mode(env: &Env, mode: VoteWeightMode) {
+    env.storage().instance().set(&symbol_short!("vw_mode"), &mode);
+}
+
+// ── Proposal Vec store ────────────────────────────────────────────────────────
+
 pub fn get_admin_proposals(env: &Env) -> Vec<AdminProposal> {
     env.storage()
         .instance()
